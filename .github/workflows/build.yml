@@ -1,0 +1,107 @@
+# 게임을 자동으로 만든다.
+# - 코드가 올라올 때마다(push, PR) 자동 점검을 돌리고 Windows 실행 파일과 웹 버전을 만들어
+#   "Artifacts" 에 Champion-Windows, Champion-Web 으로 올린다.
+# - main 에 합쳐지면
+#   * Releases 의 "최신 빌드(latest)" 에 Windows zip 을 올리고
+#   * 웹 버전을 GitHub Pages 에 올려서 주소만 열면 바로 할 수 있게 한다.
+name: 게임 빌드
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 내보내기 템플릿 준비
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+
+      - name: 프로젝트 불러오기
+        run: godot --headless --import || true
+
+      - name: 자동 점검 (연습장 + AI 대결)
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/smoke_test.gd 2>&1 | tee smoke.log
+          grep -q "SMOKE => OK" smoke.log
+
+      - name: Windows 실행 파일 만들기
+        run: |
+          mkdir -p build/windows
+          godot --headless --export-release "Windows Desktop" build/windows/Champion.exe
+          test -f build/windows/Champion.exe
+
+      - name: 웹 버전 만들기
+        run: |
+          mkdir -p build/web
+          godot --headless --export-release "Web" build/web/index.html
+          test -f build/web/index.html
+          ls -la build/web
+
+      - name: 결과물 올리기 (Windows)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Champion-Windows
+          path: build/windows/
+
+      - name: 결과물 올리기 (웹)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Champion-Web
+          path: build/web/
+
+      - name: 웹 버전을 Pages 용으로 묶기
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: build/web/
+
+      - name: 압축
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          apt-get update -qq && apt-get install -y -qq zip >/dev/null || true
+          cd build/windows && zip -r ../../Champion-Windows.zip .
+
+      - name: 최신 빌드로 공개 (Releases)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 최신 빌드
+          prerelease: true
+          make_latest: true
+          files: Champion-Windows.zip
+          body: |
+            가장 최근 버전의 Windows 실행 파일입니다.
+            Champion-Windows.zip 을 받아 압축을 풀고 Champion.exe 를 더블클릭하세요.
+
+  # 웹 버전을 GitHub Pages 에 올린다 (저장소 Settings → Pages → Source 를 "GitHub Actions" 로 한 번 설정해야 함)
+  deploy-web:
+    needs: build
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Pages 에 올리기
+        id: deployment
+        uses: actions/deploy-pages@v4
