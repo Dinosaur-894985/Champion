@@ -264,6 +264,19 @@ func show_menu(kind: String) -> void:
 	get_tree().paused = true
 
 
+## 잠깐 화면을 검게 가린다 (그 사이 효과를 미리 그려 둠).
+func cover(seconds: float) -> void:
+	var rect := ColorRect.new()
+	rect.color = Color(0.03, 0.04, 0.06)
+	rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+	rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(rect)
+	var tw := rect.create_tween()
+	tw.tween_interval(seconds)
+	tw.tween_property(rect, "modulate:a", 0.0, 0.2)
+	tw.tween_callback(rect.queue_free)
+
+
 func hide_menu() -> void:
 	_overlay.visible = false
 	_menu_kind = ""

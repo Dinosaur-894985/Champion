@@ -48,8 +48,17 @@ func _start_duel() -> void:
 	root.add_child(_game)
 
 
+var _last_us := 0
+var _spikes := []
+
+
 func _process(_delta: float) -> bool:
 	_frame += 1
+	var now := Time.get_ticks_usec()
+	if _last_us > 0 and _frame > 20:
+		var ms := (now - _last_us) / 1000.0
+		_spikes.append([ms, "%s#%d" % [_phase, _frame]])
+	_last_us = now
 	if _phase == "practice":
 		_practice_step()
 	elif _phase == "duel":
@@ -159,6 +168,9 @@ func _finish_duel(player: Player, ai: Duelist) -> void:
 		_fail.append("block/parry never worked")
 	if is_instance_valid(ai):
 		print("AI stats ", ai.stats)
+	_spikes.sort_custom(func(a, b): return a[0] > b[0])
+	var med: float = _spikes[_spikes.size() / 2][0] if _spikes.size() > 0 else 0.0
+	print("FRAMES median=%.1fms worst=%s" % [med, _spikes.slice(0, 8)])
 	print("SMOKE => %s %s" % ["OK" if _fail.is_empty() else "FAIL", _fail])
 	_phase = "done"
 	quit(0 if _fail.is_empty() else 1)

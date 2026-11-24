@@ -281,6 +281,12 @@ func _use_stamina(amount: float) -> void:
 	stamina_changed.emit(stamina, MAX_STAMINA)
 
 
+## 시작 전에 잔상 효과를 한 번 그려 둔다 (첫 공격 때 멈칫하지 않도록).
+func warmup() -> void:
+	var trail_mat: StandardMaterial3D = _trail.material_override
+	trail_mat.albedo_color.a = 0.02
+
+
 # ---------------- 대시 ----------------
 
 func try_dash() -> void:
@@ -538,8 +544,8 @@ func _check_hits(data: Dictionary) -> void:
 func _on_hit_landed(heavy: bool) -> void:
 	_shake = 0.6 if heavy else 0.3
 	# 타격감: 아주 잠깐 시간을 멈춘다 (히트스톱)
-	Engine.time_scale = 0.05
-	await get_tree().create_timer(0.07 if heavy else 0.04, true, false, true).timeout
+	Engine.time_scale = 0.1
+	await get_tree().create_timer(0.06 if heavy else 0.035, true, false, true).timeout
 	Engine.time_scale = 1.0
 
 
