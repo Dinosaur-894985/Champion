@@ -207,6 +207,14 @@ func _build_environment() -> void:
 	env.adjustment_enabled = true
 	env.adjustment_saturation = 1.08
 
+	# 웹(호환 렌더러)에서는 같은 설정이 더 밝고 물빠져 보여서 조금 눌러 준다
+	var compat := OS.has_feature("web")
+	if compat:
+		env.tonemap_exposure = 0.78
+		env.ambient_light_energy = 0.55
+		env.adjustment_saturation = 1.2
+		env.adjustment_contrast = 1.08
+
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
@@ -214,7 +222,7 @@ func _build_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48, -35, 0)
 	sun.light_color = Color(1.0, 0.95, 0.86)
-	sun.light_energy = 1.25
+	sun.light_energy = 1.0 if compat else 1.25
 	sun.shadow_enabled = true
 	sun.shadow_blur = 1.2
 	sun.directional_shadow_max_distance = 60.0
