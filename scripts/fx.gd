@@ -23,7 +23,6 @@ static func sparks(world: Node, pos: Vector3, normal: Vector3 = Vector3.UP, amou
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.albedo_color = color
 	p.material_override = m
-	_flash_light(world, pos, color)
 
 
 ## 몸에 맞은 자리에서 작은 조각들이 튄다.
@@ -55,15 +54,3 @@ static func _burst(world: Node, pos: Vector3, amount: int, life: float) -> CPUPa
 	p.emitting = true
 	p.get_tree().create_timer(life + 0.3, false).timeout.connect(p.queue_free)
 	return p
-
-
-static func _flash_light(world: Node, pos: Vector3, color: Color) -> void:
-	var light := OmniLight3D.new()
-	light.light_color = color
-	light.light_energy = 4.0
-	light.omni_range = 3.0
-	world.add_child(light)
-	light.global_position = pos
-	var tw := light.create_tween()
-	tw.tween_property(light, "light_energy", 0.0, 0.18)
-	tw.tween_callback(light.queue_free)

@@ -558,3 +558,20 @@ func _spawn_number(damage: int, heavy: bool) -> void:
 	tw.tween_property(label, "modulate:a", 0.0, 0.8).set_delay(0.3)
 	tw.tween_property(label, "outline_modulate:a", 0.0, 0.8).set_delay(0.3)
 	tw.chain().tween_callback(label.queue_free)
+
+
+## 시작 전에 맞았을 때 효과(번쩍임, 피해 숫자)를 한 번 그려 둔다.
+func warmup(pos: Vector3) -> void:
+	_flash = 0.05
+	# 숫자 글자도 크기별로 미리 그려 둔다 (글자를 처음 만들 때도 멈칫한다)
+	for size in [72, 96]:
+		var label := Label3D.new()
+		label.text = "0123456789"
+		label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		label.no_depth_test = true
+		label.font_size = size
+		label.outline_size = 18
+		label.pixel_size = 0.0005
+		get_parent().add_child(label)
+		label.global_position = pos
+		get_tree().create_timer(0.3, false).timeout.connect(label.queue_free)

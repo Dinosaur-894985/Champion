@@ -43,6 +43,8 @@ func _ready() -> void:
 	else:
 		_setup_practice()
 
+	_warmup()
+
 	if first_launch:
 		hud.show_menu("start")
 	else:
@@ -78,6 +80,24 @@ func _setup_duel() -> void:
 	duelist.died.connect(_on_round_end.bind(true))
 	player.died.connect(_on_round_end.bind(false))
 	player.controls_enabled = false
+
+
+## 효과(불꽃, 파편, 피해 숫자, 번쩍임)를 시작 전에 한 번씩 몰래 그려 둔다.
+## 처음 그릴 때 그래픽 준비(셰이더 컴파일)로 화면이 멈칫하는데, 특히 웹에서 심하다.
+## 그래서 싸우는 도중이 아니라 시작 화면이 가려진 동안 미리 해 둔다.
+func _warmup() -> void:
+	hud.cover(0.5)
+	var cam := player.camera
+	var p := cam.global_position - cam.global_transform.basis.z * 2.5
+	Fx.sparks(self, p, Vector3.UP, 4)
+	Fx.sparks(self, p, Vector3.UP, 4, Color(0.7, 0.9, 1.0))
+	Fx.impact(self, p, Vector3.UP, Color(0.75, 0.1, 0.08), 4)
+	player.warmup()
+	if duelist:
+		duelist.warmup(p)
+	for d in get_children():
+		if d is TrainingDummy:
+			d.warmup(p)
 
 
 func _countdown() -> void:
