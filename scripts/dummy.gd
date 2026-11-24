@@ -110,9 +110,9 @@ func _build() -> void:
 
 
 ## 칼에 맞았을 때 불린다. dir 은 맞은 방향 (공격자 → 허수아비).
-func take_hit(damage: int, dir: Vector3, heavy: bool) -> void:
+func take_hit(damage: int, dir: Vector3, heavy: bool, _attacker: Node3D = null) -> String:
 	if down:
-		return
+		return "none"
 	hp = max(hp - damage, 0)
 	var local_dir := global_transform.basis.inverse() * dir
 	var push := (0.9 if heavy else 0.5)
@@ -123,8 +123,11 @@ func take_hit(damage: int, dir: Vector3, heavy: bool) -> void:
 	_audio.play()
 	_spawn_number(damage, heavy)
 	hit_taken.emit(damage)
+	Fx.impact(get_parent(), global_position + Vector3(0, 1.2, 0) - dir * 0.3, -dir + Vector3.UP * 0.5,
+			Color(0.85, 0.72, 0.42), 20 if heavy else 12)
 	if hp <= 0:
 		_fall(local_dir)
+	return "hit"
 
 
 func _fall(local_dir: Vector3) -> void:

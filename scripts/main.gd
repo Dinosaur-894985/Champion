@@ -1,24 +1,59 @@
+class_name Game
 extends Node3D
-## 연습장: 하늘과 빛, 바닥, 울타리, 나무, 허수아비, 플레이어, 화면 표시(HUD)를 만든다.
+## 게임 전체: 경기장(하늘, 바닥, 울타리, 나무)을 만들고, 모드에 따라
+## 연습(허수아비) 또는 대결(AI 결투사)을 시작한다.
 
 const HUD_SCRIPT := preload("res://scripts/hud.gd")
 
+## 다시 불러올 때 시작할 모드. "" 이면 처음 켠 것이라 시작 화면을 보여준다.
+static var next_mode := ""
+
+var mode := "practice"
 var player: Player
+var duelist: Duelist
 var hud: CanvasLayer
 var hits := 0
 var knockdowns := 0
+var round_over := false
 
 
 func _ready() -> void:
+	Engine.time_scale = 1.0
 	_setup_inputs()
 	_build_environment()
 	_build_arena()
 	_build_props()
 
+	var first_launch := next_mode == ""
+	mode = "practice" if first_launch else next_mode
+
 	player = Player.new()
-	player.position = Vector3(0, 0.1, 7.5)
 	add_child(player)
 
+	hud = HUD_SCRIPT.new()
+	add_child(hud)
+	hud.menu_choice.connect(_on_menu_choice)
+	player.stamina_changed.connect(hud.set_stamina)
+	player.hp_changed.connect(hud.set_player_hp)
+	player.took_damage.connect(hud.on_player_damaged)
+	player.combat_event.connect(hud.show_event)
+
+	if mode == "duel":
+		_setup_duel()
+	else:
+		_setup_practice()
+
+	if first_launch:
+		hud.show_menu("start")
+	else:
+		hud.hide_menu()
+		if mode == "duel":
+			_countdown()
+
+
+func _setup_practice() -> void:
+	player.position = Vector3(0, 0.1, 7.5)
+	hud.set_mode("practice")
 	for i in 3:
 		var d := TrainingDummy.new()
 		var x := (i - 1) * 3.2
@@ -27,11 +62,73 @@ func _ready() -> void:
 		add_child(d)
 		d.hit_taken.connect(_on_hit)
 		d.knocked_down.connect(_on_knockdown)
-
-	hud = HUD_SCRIPT.new()
-	add_child(hud)
-	player.stamina_changed.connect(hud.set_stamina)
 	hud.set_stats(hits, knockdowns)
+
+
+func _setup_duel() -> void:
+	player.position = Vector3(0, 0.1, 3.5)
+	hud.set_mode("duel")
+	duelist = Duelist.new()
+	duelist.position = Vector3(0, 0.1, -5.5)
+	add_child(duelist)
+	duelist.target = player
+	player.attack_started.connect(duelist.on_target_attack)
+	duelist.hp_changed.connect(hud.set_enemy_hp)
+	duelist.combat_event.connect(hud.show_event)
+	duelist.died.connect(_on_round_end.bind(true))
+	player.died.connect(_on_round_end.bind(false))
+	player.controls_enabled = false
+
+
+func _countdown() -> void:
+	player.controls_enabled = false
+	for t in ["3", "2", "1"]:
+		hud.show_big(t, Color(1, 1, 1))
+		await get_tree().create_timer(0.7, false).timeout
+	hud.show_big("싸워라!", Color(1.0, 0.8, 0.35))
+	player.controls_enabled = true
+	duelist.active = true
+
+
+func _on_round_end(player_won: bool) -> void:
+	if round_over:
+		return
+	round_over = true
+	duelist.active = false
+	player.controls_enabled = false
+	# 결정타 슬로모션
+	Engine.time_scale = 0.3
+	await get_tree().create_timer(0.9, true, false, true).timeout
+	Engine.time_scale = 1.0
+	hud.show_big("승리!" if player_won else "패배", Color(1.0, 0.85, 0.3) if player_won else Color(1.0, 0.35, 0.3))
+	await get_tree().create_timer(1.4, false).timeout
+	hud.show_menu("win" if player_won else "lose")
+
+
+func _on_menu_choice(choice: String) -> void:
+	match choice:
+		"resume":
+			hud.hide_menu()
+		"practice", "duel":
+			if choice == mode and next_mode == "" and not round_over:
+				# 처음 켠 화면에서 지금 모드를 고른 경우: 그대로 시작
+				next_mode = mode
+				hud.hide_menu()
+				if mode == "duel":
+					_countdown()
+			else:
+				restart(choice)
+		"retry":
+			restart(mode)
+		"quit":
+			get_tree().quit()
+
+
+func restart(new_mode: String) -> void:
+	next_mode = new_mode
+	Engine.time_scale = 1.0
+	get_tree().paused = false
+	get_tree().reload_current_scene()
 
 
 func _on_hit(_damage: int) -> void:
@@ -54,13 +151,15 @@ func _setup_inputs() -> void:
 	_bind_keys("move_right", [KEY_D, KEY_RIGHT])
 	_bind_keys("sprint", [KEY_SHIFT])
 	_bind_keys("jump", [KEY_SPACE])
+	_bind_keys("heavy_attack", [KEY_Q])
 	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
-	_bind_mouse("heavy_attack", MOUSE_BUTTON_RIGHT)
+	_bind_mouse("block", MOUSE_BUTTON_RIGHT)
 
 
 func _bind_keys(action: String, keys: Array) -> void:
-	if not InputMap.has_action(action):
-		InputMap.add_action(action)
+	if InputMap.has_action(action):
+		return
+	InputMap.add_action(action)
 	for k in keys:
 		var ev := InputEventKey.new()
 		ev.physical_keycode = k
@@ -68,8 +167,9 @@ func _bind_keys(action: String, keys: Array) -> void:
 
 
 func _bind_mouse(action: String, button: MouseButton) -> void:
-	if not InputMap.has_action(action):
-		InputMap.add_action(action)
+	if InputMap.has_action(action):
+		return
+	InputMap.add_action(action)
 	var ev := InputEventMouseButton.new()
 	ev.button_index = button
 	InputMap.action_add_event(action, ev)
