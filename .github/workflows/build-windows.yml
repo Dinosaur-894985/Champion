@@ -1,0 +1,71 @@
+# Windows 실행 파일을 자동으로 만든다.
+# - 코드가 올라올 때마다(push, PR) 빌드해서 "Artifacts" 에 Champion-Windows.zip 으로 올린다.
+# - main 에 합쳐지면 Releases 의 "최신 빌드(latest)" 에도 올려서 누구나 받을 수 있게 한다.
+name: Windows 빌드
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  GODOT_VERSION: "4.3"
+
+jobs:
+  windows:
+    runs-on: ubuntu-latest
+    container:
+      image: barichello/godot-ci:4.3
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 내보내기 템플릿 준비
+        run: |
+          mkdir -v -p ~/.local/share/godot/export_templates/
+          if [ ! -d ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable ]; then
+            mv /root/.local/share/godot/export_templates/${GODOT_VERSION}.stable ~/.local/share/godot/export_templates/${GODOT_VERSION}.stable
+          fi
+
+      - name: 프로젝트 불러오기
+        run: godot --headless --import || true
+
+      - name: 자동 점검 (걷기, 베기)
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/smoke_test.gd 2>&1 | tee smoke.log
+          grep -q "=> OK" smoke.log
+
+      - name: Windows 실행 파일 만들기
+        run: |
+          mkdir -p build/windows
+          godot --headless --export-release "Windows Desktop" build/windows/Champion.exe
+          ls -la build/windows
+          test -f build/windows/Champion.exe
+
+      - name: 결과물 올리기 (Artifacts)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Champion-Windows
+          path: build/windows/
+
+      - name: 압축
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          apt-get update -qq && apt-get install -y -qq zip >/dev/null || true
+          cd build/windows && zip -r ../../Champion-Windows.zip .
+
+      - name: 최신 빌드로 공개 (Releases)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 최신 빌드
+          prerelease: true
+          make_latest: true
+          files: Champion-Windows.zip
+          body: |
+            가장 최근 버전의 Windows 실행 파일입니다.
+            Champion-Windows.zip 을 받아 압축을 풀고 Champion.exe 를 더블클릭하세요.
