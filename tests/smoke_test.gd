@@ -5,6 +5,9 @@ extends SceneTree
 ##  3) 추격: 지붕, 기둥 위로 올라간 플레이어를 AI 가 찾아 올라오는지 본다.
 ##  4) 대결: AI 가 다가와 공격하는지, 막기/튕겨내기가 되는지, AI 를 때릴 수 있는지 본다.
 ##     (자동 조종: 상대 칼이 빛나면 막고, 빈틈이 보이면 벤다)
+##  5) 수싸움(only=rps): 가위바위보(공격>잡기>막기>공격), 방향 막기, 속임수, 던져서 벽꽝을 하나씩 확인한다.
+## 자동 조종(bot=): good 방향을 읽고 막고 섞어 공격 / masher 옆 베기만 연타 / blocker 옆으로만 막고 버팀
+##                  grabber 잡기만 / dodger 옆으로 피하고 반격
 ## 실행: godot --headless --fixed-fps 60 -s res://tests/smoke_test.gd
 ## 사진 남기기: 끝에 -- shots=폴더   /  대결만: -- only=duel
 
@@ -25,6 +28,7 @@ var _counters := 0
 var _dodge_side := 1.0
 var _ai_preset := "검객"
 var _my_preset := ""
+var _trace := false   # trace=1: 대결 중 AI 상태 변화와 결과를 한 줄씩 출력
 
 
 func _initialize() -> void:
@@ -42,6 +46,8 @@ func _initialize() -> void:
 			_ai_preset = a.substr(7)
 		elif a.begins_with("me="):
 			_my_preset = a.substr(3)
+		elif a == "trace=1":
+			_trace = true
 	seed(seed_value)
 	# 매번 같은 결과가 나오도록 상대와 내 캐릭터를 정해 둔다
 	Game.opponent_mode = "preset"
@@ -57,6 +63,8 @@ func _initialize() -> void:
 		_start_chase()
 	elif _only == "skills":
 		_start_skills()
+	elif _only == "rps":
+		_start_rps()
 	else:
 		Game.next_mode = "practice"
 		_game = GAME.instantiate()
@@ -90,6 +98,8 @@ func _process(_delta: float) -> bool:
 		_chase_step()
 	elif _phase == "skills":
 		_skills_step()
+	elif _phase == "rps":
+		_rps_step()
 	elif _phase == "duel":
 		_duel_step()
 	return false
@@ -300,6 +310,10 @@ func _duel_step() -> void:
 		_game.hud.hide_menu()
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		player.attack_received.connect(func(r): _results[r] = _results.get(r, 0) + 1)
+		if _trace:
+			ai.sm.changed.connect(func(_a, b): print("  %4d AI %-8s %s d=%.1f" % [_frame, b, ai._attack if b in ["windup", "strike"] else "", ai._dist]))
+			player.attack_received.connect(func(r): print("  %4d   me <- %s" % [_frame, r]))
+			player.sm.changed.connect(func(_a, b): print("  %4d   me %s %s" % [_frame, b, player._move]))
 	if _frame == 150:
 		_shot("d1_face")
 	if not is_instance_valid(ai) or ai.dead or player.dead or _frame > 1500:
@@ -321,6 +335,16 @@ func _duel_step() -> void:
 		_shot_once("e_ai_stagger")
 	if player.sm.state == "stagger" and player._stun_kind == "stagger":
 		_shot_once("e_player_stagger")
+	# 수싸움 장면
+	var adir := ai.attack_dir()
+	if adir != "" and ai.windup_progress() > 0.6 and ai.state == "windup":
+		_shot_once("m_ai_windup_" + adir)
+	if ai.state == "block" and ai._state_t > 0.15:
+		_shot_once("m_ai_block_" + ai.guard_dir)
+	if player.blocking and player.sm.time > 0.1:
+		_shot_once("m_me_block_" + player.guard_dir)
+	if player.sm.state == "stagger" and player._stun_kind == "thrown" and player.sm.time > 0.2:
+		_shot_once("m_me_thrown")
 
 
 ## 아주 단순한 자동 조종: 상대를 바라보고, 칼이 빛나면 막고, 빈틈에 벤다.
@@ -343,13 +367,39 @@ func _autopilot(player: Player, ai: Duelist) -> void:
 		if dist < 2.6 and _frame % 25 == 0:
 			player._request_attack("light")
 		return
+	if _bot == "blocker":
+		# 옆으로만 막고 버티다가, 막아낸 뒤 한 번 벤다
+		Input.action_press("move_forward") if dist > 2.2 else Input.action_release("move_forward")
+		if ai.state in ["stagger", "recover"] and dist < 2.6 and _frame % 10 == 0:
+			Input.action_release("block")
+			player._request_attack("light")
+		elif player.sm.state == "free":
+			player.guard_dir = "side"
+			Input.action_press("block")
+		return
+	if _bot == "grabber":
+		Input.action_press("move_forward") if dist > 1.5 else Input.action_release("move_forward")
+		if dist < 1.9 and player.sm.state == "free" and _frame % 12 == 0:
+			player.try_grab()
+		return
 	var threat := ai.state == "windup"
 	var time_left := 1.0
 	if threat:
-		time_left = MoveSet.MOVES[ai._attack].ai_windup - ai._state_t
-	# 막기: 앞쪽 공격은 칼이 닿기 직전에 눌러서 튕겨내기를 노린다
-	if threat and time_left < 0.12 and dist < 3.2:
+		time_left = ai._windup_len - ai._state_t
+	var adir := ai.attack_dir()
+	if adir == "grab":
+		# 잡으려 한다: 막지 말고 먼저 벤다 (공격 > 잡기)
+		Input.action_release("block")
+		if player.sm.state in ["free", "block"] and dist < 2.6:
+			player.attack_pressed("mid")
+			player.attack_released()
+		return
+	# 막기: 상대 공격 방향을 보고, 칼이 닿기 직전에 눌러서 튕겨내기를 노린다
+	if threat and time_left < 0.14 and dist < 3.2:
+		player.set_guard(adir)
 		Input.action_press("block")
+	elif player.blocking and adir != "" and adir != player.guard_dir:
+		player.set_guard(adir)   # 속임수로 방향이 바뀌면 다시 맞춘다
 	elif ai.state != "strike":
 		Input.action_release("block")
 	# 거리 조절
@@ -357,9 +407,14 @@ func _autopilot(player: Player, ai: Duelist) -> void:
 		Input.action_press("move_forward")
 	else:
 		Input.action_release("move_forward")
-	# 빈틈 공격
+	# 상대가 막고 서 있으면 잡는다 (잡기 > 막기)
+	if ai.state == "block" and dist < 1.9 and player.sm.state == "free" and _frame % 10 == 0:
+		player.try_grab()
+		return
+	# 빈틈 공격: 방향을 섞는다
 	if ai.state in ["stagger", "recover"] and dist < 2.6 and not player.blocking and _frame % 6 == 0:
-		player._request_attack("light")
+		player.attack_pressed(["side", "high", "mid"][randi() % 3])
+		player.attack_released()
 
 
 func _click(player: Player, down: bool) -> void:
@@ -395,6 +450,18 @@ func _dodger(player: Player, ai: Duelist, dist: float) -> void:
 		player._request_attack("combo")
 
 
+## 수싸움 결과 출력용
+func _ai_summary(ai: Duelist) -> String:
+	var keys := ["move_grab", "grab_thrown", "grab_beaten", "feint", "feint_grab", "feint_switch", "feint_stop",
+			"move_overhead", "move_thrust", "move_slash1", "wrong_guard", "got_blocked", "got_parried", "got_hit",
+			"got_grab_thrown", "got_grab_beaten", "charge_cancel", "wall_slam"]
+	var out := []
+	for k in keys:
+		if ai.stats.has(k):
+			out.append("%s=%d" % [k, ai.stats[k]])
+	return " ".join(out)
+
+
 func _finish_duel(player: Player, ai: Duelist) -> void:
 	Input.action_release("block")
 	Input.action_release("move_forward")
@@ -419,8 +486,15 @@ func _finish_duel(player: Player, ai: Duelist) -> void:
 		_fail.append("could not damage AI")
 	if _bot == "good" and not (_results.has("blocked") or _results.has("parried")):
 		_fail.append("block/parry never worked")
+	if _bot in ["blocker", "grabber"]:
+		# 한 가지만 하는 상대는 AI 가 읽고 이겨야 한다
+		_fail.clear()
+		if ai_hp <= 0:
+			_fail.append("AI lost to one-trick " + _bot)
 	if is_instance_valid(ai):
 		print("AI stats ", ai.stats)
+		print("MIND bot=%s %s  block_ratio=%.2f grab_rate=%.2f guard_skill=%.2f" % [_bot, _ai_summary(ai),
+				ai.mind.block_ratio, ai.mind.grab_rate, ai.mind.guard_skill()])
 	_spikes.sort_custom(func(a, b): return a[0] > b[0])
 	var med: float = _spikes[_spikes.size() / 2][0] if _spikes.size() > 0 else 0.0
 	print("FRAMES median=%.1fms worst=%s" % [med, _spikes.slice(0, 8)])
@@ -613,4 +687,148 @@ func _skills_iron(player: Player) -> void:
 		if _only == "skills":
 			_report_and_quit()
 		else:
+			_start_rps()
+
+
+# ---------------- 수싸움 ----------------
+# 가위바위보와 방향 막기를 하나씩 직접 맞붙여 본다. AI 는 멈춰 두고(active=false) 자세만 정한다.
+
+var _rps := {}
+
+
+func _start_rps() -> void:
+	_phase = "rps"
+	_frame = 0
+	Game.next_mode = "duel"
+	_game = GAME.instantiate()
+	root.add_child(_game)
+
+
+func _rps_check(name: String, got, want) -> void:
+	var ok: bool = got == want
+	print("RPS %-34s got=%s want=%s  => %s" % [name, got, want, "OK" if ok else "FAIL"])
+	if not ok:
+		_fail.append("rps " + name)
+
+
+func _rps_step() -> void:
+	var player: Player = _game.player
+	var ai: Duelist = _game.duelist
+	if _frame == 3:
+		_game.hud.hide_menu()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		player.controls_enabled = true
+		player.hp = 100000
+		ai.hp = 100000
+		ai.max_hp = 100000
+		ai.parry_chance = 0.0
+		ai.counter_chance = 0.0
+		player.feinted.connect(func(): _rps["feinted"] = true)
+	if _frame == 5:
+		_rps_place(player, ai, Vector3(0, 0.1, 0), 1.5)
+		var hit := {"damage": 10, "react": "flinch", "guard": "normal", "pressure": 1.0}
+		# 1) 막기 > 공격 (방향이 같을 때만)
+		ai.guard_dir = "side"
+		ai.sm.go("block")
+		_rps_check("AI side guard vs side slash", ai.take_hit(_with(hit, "side"), Vector3.FORWARD, player), "blocked")
+		ai.sm.go("block")
+		_rps_check("AI side guard vs thrust", ai.take_hit(_with(hit, "mid"), Vector3.FORWARD, player), "hit")
+		ai.guard_dir = "high"
+		ai.sm.go("block")
+		_rps_check("AI high guard vs overhead", ai.take_hit(_with(hit, "high"), Vector3.FORWARD, player), "blocked")
+		player.guard_dir = "high"
+		player.sm.go("block")
+		player._guard_t = 1.0
+		_rps_check("player high guard vs overhead", player.receive_attack(_with(hit, "high"), ai), "blocked")
+		player.sm.go("block")
+		player._guard_t = 1.0
+		_rps_check("player high guard vs side", player.receive_attack(_with(hit, "side"), ai), "wrong_guard")
+		player.sm.go("block")
+		player.guard_dir = "mid"
+		player._guard_t = 0.0
+		_rps_check("player mid guard parry thrust", player.receive_attack(_with(hit, "mid"), ai), "parried")
+		# 2) 잡기 > 막기
+		var grab := {"damage": 12, "react": "thrown", "throw": Vector3.ZERO}
+		player.sm.go("free")
+		ai.sm.go("block")
+		_rps_check("grab vs blocking AI", ai.take_grab(grab, player), "thrown")
+		player.sm.go("block")
+		_rps_check("grab vs blocking player", player.take_grab(grab, ai), "thrown")
+		# 3) 공격 > 잡기
+		ai._attack = "slash1"
+		ai.sm.go("windup")
+		_rps_check("grab vs AI winding up", ai.take_grab(grab, player), "beaten")
+		player.sm.go("free")
+		player._start_attack("overhead")
+		_rps_check("grab vs player winding up", player.take_grab(grab, ai), "beaten")
+		ai._attack = "grab"
+		ai.sm.go("windup")
+		player.sm.go("free")
+		_rps_check("AI grab warns as grab", ai.attack_dir(), "grab")
+		# 4) 속임수: 내려찍기를 준비하다 오른쪽 클릭 → 막기로
+		ai.sm.go("idle")
+		player.sm.go("free")
+		player._start_attack("heavy")
+		player.block_pressed("mid")
+		_rps_check("feint heavy into block", [player.sm.state, player.guard_dir, _rps.get("feinted", false)],
+				["block", "mid", true])
+		# 차지 → 대시로 끊기
+		player.sm.go("charge")
+		_rps["feinted"] = false
+		player.try_dash()
+		_rps_check("charge cancel into dash", [player.sm.state, _rps.feinted], ["dash", true])
+		# 마우스 방향 → 공격 동작
+		player.sm.go("free")
+		player.attack_pressed("high")
+		_rps_check("flick up = overhead", player._move, "overhead")
+		player.sm.go("free")
+		player.attack_pressed("mid")
+		_rps_check("flick down = thrust", player._move, "thrust")
+		player.sm.go("free")
+		player.attack_released()
+		_rps_check("flick dir", [AttackDir.from_flick(Vector2(2, -30)), AttackDir.from_flick(Vector2(30, 5)),
+				AttackDir.from_flick(Vector2(-3, 25)), AttackDir.from_flick(Vector2(3, 2))], ["high", "side", "mid", ""])
+	# 5) 실제로 잡아 던지기: 서쪽 집 벽 앞에서 막고 있는 AI 를 벽 쪽으로 던진다 → 벽꽝
+	if _frame == 10:
+		ai.sm.go("idle")
+		player.sm.go("free")
+		player.global_position = Vector3(-10.2, 0.1, 0)
+		player.rotation.y = PI / 2.0
+		player.head.rotation.x = 0.0
+		ai.global_position = Vector3(-11.6, 0.1, 0)
+		ai.rotation.y = -PI / 2.0
+		ai.velocity = Vector3.ZERO
+		_rps["hp0"] = ai.hp
+		player.stamina = player.max_stamina
+	if _frame == 14:
+		ai.guard_dir = "side"
+		ai.sm.go("block")
+		player.try_grab()
+	if _frame == 22:
+		_shot("r1_grab")
+	if _frame == 60:
+		_shot("r2_thrown")
+		_rps_check("grab+throw into wall", [ai.stats.get("got_grab_thrown", 0) >= 1, ai.stats.get("wall_slam", 0) >= 1],
+				[true, true])
+		print("    thrown: ai at x=%.2f hp lost=%d" % [ai.global_position.x, _rps.hp0 - ai.hp])
+	if _frame == 64:
+		_game.queue_free()
+		if _only == "rps":
+			_report_and_quit()
+		else:
 			_start_duel()
+
+
+func _with(info: Dictionary, dir: String) -> Dictionary:
+	var d := info.duplicate()
+	d["dir"] = dir
+	return d
+
+
+func _rps_place(player: Player, ai: Duelist, at: Vector3, gap: float) -> void:
+	player.global_position = at + Vector3(0, 0, gap * 0.5)
+	player.rotation.y = 0.0
+	ai.global_position = at - Vector3(0, 0, gap * 0.5)
+	ai.rotation.y = PI
+	player.velocity = Vector3.ZERO
+	ai.velocity = Vector3.ZERO

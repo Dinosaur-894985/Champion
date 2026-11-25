@@ -95,6 +95,9 @@ func _setup_duel() -> void:
 	duelist.target = player
 	player.attack_started.connect(duelist.on_target_attack)
 	player.charge_started.connect(duelist.on_target_charge)
+	player.feinted.connect(duelist.on_target_feint)
+	player.opponent = duelist
+	hud.set_opponent(duelist)
 	duelist.hp_changed.connect(hud.set_enemy_hp)
 	duelist.stamina_changed.connect(hud.set_enemy_stamina)
 	hud.set_enemy(duelist.build)
@@ -247,6 +250,7 @@ func _setup_inputs() -> void:
 	_bind_keys("heavy_attack", [KEY_Q])
 	_bind_keys("skill1", [KEY_E])
 	_bind_keys("skill2", [KEY_R])
+	_bind_keys("grab", [KEY_F])
 	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
 	_bind_mouse("block", MOUSE_BUTTON_RIGHT)
 
