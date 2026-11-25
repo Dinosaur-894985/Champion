@@ -15,6 +15,38 @@ extends RefCounted
 ##   body                      : 3인칭 몸 자세 [어깨, 손목, 허리 비틀기, 숙이기] — windup 과 strike
 
 const MOVES := {
+	# ---- 높이를 쓰는 기술 (scripts/combat/vertical_kit.gd 와 함께) ----
+	# 낙하 찍기: 1.6m 넘게 떠 있을 때 공격하면 아래로 내리꽂는다. 높이 떨어질수록 강하고, 막기를 깨고, 넘어뜨린다.
+	#   damage ~ damage_max: 떨어진 높이에 따라. reach: 착지할 때 둘레 반지름.
+	"plunge": {
+		"windup": 0.12, "active": 0.0, "recover": 0.55, "ai_windup": 0.3, "ai_recover": 0.75,
+		"damage": 16, "damage_max": 42, "cost": 14.0, "reach": 2.6, "lunge": 0.0, "dir": "high",
+		"react": "stagger", "guard": "break", "next": "", "warn": "heavy", "knockdown": true,
+		"fp": {"windup": [Vector3(70, 5, -5), Vector3(0.0, 0.25, 0.1)],
+				"strike": [Vector3(-110, 0, 0), Vector3(-0.15, -0.3, -0.25)]},
+		"body": {"windup": [Vector3(178, 0, 0), Vector3(0, 0, 0), 0.0, -0.1],
+				"strike": [Vector3(30, 0, 0), Vector3(0, 0, 0), 0.0, 0.5]},
+	},
+	# 공중 베기: 낮게 떠 있을 때 공격. 빠르고 앞으로 조금 나간다.
+	"air_slash": {
+		"windup": 0.09, "active": 0.12, "recover": 0.26, "ai_windup": 0.3, "ai_recover": 0.4,
+		"damage": 12, "cost": 8.0, "reach": 2.5, "lunge": 2.5, "dir": "high",
+		"react": "flinch", "guard": "normal", "next": "", "warn": "light",
+		"fp": {"windup": [Vector3(45, -35, -20), Vector3(-0.05, 0.15, 0.08)],
+				"strike": [Vector3(-60, 40, 30), Vector3(0.18, -0.15, -0.15)]},
+		"body": {"windup": [Vector3(150, -40, 0), Vector3(0, 45, 0), -0.3, -0.1],
+				"strike": [Vector3(60, 50, 0), Vector3(0, 45, 0), 0.3, 0.35]},
+	},
+	# 난간 반격: 매달린 채 공격하면 뛰어오르며 벤다. 못 막고 크게 휘청이게 한다.
+	"ledge_slash": {
+		"windup": 0.06, "active": 0.14, "recover": 0.38, "ai_windup": 0.22, "ai_recover": 0.5,
+		"damage": 17, "cost": 10.0, "reach": 2.8, "lunge": 3.0, "dir": "mid",
+		"react": "stagger", "guard": "unblockable", "ai_guard": "break", "next": "", "warn": "heavy",
+		"fp": {"windup": [Vector3(30, 70, 40), Vector3(0.15, -0.1, 0.1)],
+				"strike": [Vector3(-35, -100, -70), Vector3(-0.38, 0.05, -0.2)]},
+		"body": {"windup": [Vector3(95, 75, 0), Vector3(0, 90, 0), 0.5, -0.05],
+				"strike": [Vector3(85, -85, 0), Vector3(0, 90, 0), -0.55, 0.3]},
+	},
 	# ---- 연속 베기 (왼쪽 클릭 연타): 왼쪽→오른쪽, 오른쪽→왼쪽, 크게 휩쓸기 ----
 	"slash1": {
 		"windup": 0.14, "active": 0.10, "recover": 0.26, "ai_windup": 0.45, "ai_recover": 0.45,
@@ -78,6 +110,7 @@ const MOVES := {
 
 ## 맞았을 때 경직. time: 움직이지 못하는 시간, push: 밀려나는 힘, kick: 몸(화면)이 젖혀지는 정도
 const REACTIONS := {
+	"knockdown": {"time": 1.05, "push": 3.0, "kick": 3.0},   # 넘어짐 (낙하 찍기, 밀려 떨어짐)
 	"flinch": {"time": 0.22, "push": 2.5, "kick": 1.0},
 	"stagger": {"time": 0.6, "push": 5.5, "kick": 2.4},
 	"guard_break": {"time": 0.8, "push": 4.0, "kick": 1.8},
@@ -113,6 +146,9 @@ const TRAVERSAL := {
 
 ## 공격하지 않을 때의 자세
 const FP_POSES := {
+	"hang": [Vector3(-60, 0, -10), Vector3(0.1, -0.5, 0.1)],
+	"plunge": [Vector3(-110, 0, 0), Vector3(-0.15, -0.1, -0.2)],
+	"zip": [Vector3(70, -20, 10), Vector3(0.0, 0.15, 0.05)],
 	"rest": [Vector3.ZERO, Vector3.ZERO],
 	"block": [Vector3(8, -20, 78), Vector3(-0.32, 0.26, 0.05)],
 	"stagger": [Vector3(-35, 25, -40), Vector3(0.12, -0.28, 0.12)],
@@ -120,6 +156,8 @@ const FP_POSES := {
 	"wallrun": [Vector3(-10, 30, 25), Vector3(0.05, -0.12, 0.05)],
 }
 const BODY_POSES := {
+	"hang": [Vector3(175, 0, 0), Vector3(0, 0, 0), 0.0, -0.1],
+	"plunge": [Vector3(178, 0, 0), Vector3(0, 0, 0), 0.0, 0.4],
 	"guard": [Vector3(55, -15, 0), Vector3(0, 0, 0), 0.0, 0.0],
 	"block": [Vector3(80, 25, 0), Vector3(0, 90, 0), 0.0, -0.05],
 	"stagger": [Vector3(20, -40, 0), Vector3(0, 30, 0), 0.25, -0.3],

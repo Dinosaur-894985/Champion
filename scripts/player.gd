@@ -67,6 +67,9 @@ var max_stamina := MAX_STAMINA
 var hp := MAX_HP
 var stamina := MAX_STAMINA
 var skills: SkillKit
+## 높이 규칙 (밀려 떨어지기, 낭떠러지, 난간, 아이템) — scripts/combat/vertical_kit.gd
+var vkit: VerticalKit
+var arena: Arena
 var controls_enabled := true
 var dead := false
 var blocking: bool:
@@ -153,6 +156,7 @@ func _ready() -> void:
 	stamina = max_stamina
 	traits = {"wall_climb": build.has("wall"), "wall_run": build.has("wall")}
 	skills = SkillKit.new(self, build)
+	vkit = VerticalKit.new(self)
 	collision_layer = 1
 	collision_mask = 1 | 2
 	var col := CollisionShape3D.new()
@@ -204,7 +208,10 @@ func _ready() -> void:
 		.add("climb", _climb_enter, _climb_update, _climb_exit) \
 		.add("wallrun", _wallrun_enter, _wallrun_update, _wallrun_exit) \
 		.add("grapple", _grapple_enter, _grapple_update, _grapple_exit) \
-		.add("iron", _iron_enter, _iron_update, _iron_exit)
+		.add("iron", _iron_enter, _iron_update, _iron_exit) \
+		.add("plunge", _plunge_enter, _plunge_update, _plunge_exit) \
+		.add("hang", _hang_enter, _hang_update, _hang_exit) \
+		.add("zip", _zip_enter, _zip_update, _zip_exit)
 	sm.go("free")
 	_ray.exclude = [get_rid()]
 	_ray.collision_mask = 1
@@ -294,7 +301,7 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _physics_process(delta: float) -> void:
 	var on_floor := is_on_floor()
-	var on_wall_move := sm.is_in(["climb", "wallrun", "grapple"])
+	var on_wall_move := sm.is_in(["climb", "wallrun", "grapple", "hang", "zip"])
 	if not on_floor and not on_wall_move:
 		velocity.y -= _gravity * delta
 		_coyote -= delta
@@ -322,7 +329,7 @@ func _physics_process(delta: float) -> void:
 	# 이중 점프는 점프 키를 한 번 뗐다가 다시 눌러야 나간다 (같은 누름으로 두 번 뛰지 않게)
 	if not Input.is_action_pressed("jump"):
 		_jump_released = true
-	if _can_act() and not sm.is_in(["dash", "climb", "wallrun", "grapple"]) and Input.is_action_just_pressed("jump"):
+	if _can_act() and not sm.is_in(["dash", "climb", "wallrun", "grapple", "plunge", "hang", "zip"]) and Input.is_action_just_pressed("jump"):
 		_jump_buffer = JUMP_BUFFER
 		# 이중 점프: 공중에서 한 번 더
 		if _coyote <= 0.0 and _jump_released and skills.try_double_jump(JUMP_VELOCITY * 0.95):
@@ -344,7 +351,7 @@ func _physics_process(delta: float) -> void:
 			and input.y < 0.0 and stamina > 0.0
 	var speed := (SPRINT_SPEED if _sprinting else WALK_SPEED) * _move_mult() * build.speed_mult() * skills.speed_mult()
 
-	if not sm.is_in(["dash", "climb", "wallrun", "grapple"]):
+	if not sm.is_in(["dash", "climb", "wallrun", "grapple", "plunge", "hang", "zip"]):
 		var accel := GROUND_ACCEL if on_floor else AIR_ACCEL
 		var target := dir * speed
 		velocity.x = lerpf(velocity.x, target.x, clampf(accel * delta, 0, 1))
@@ -352,6 +359,7 @@ func _physics_process(delta: float) -> void:
 	_fall_speed = velocity.y
 	move_and_slide()
 	_after_move(on_floor, input)
+	_vertical_tick(delta)
 
 	# 기력
 	if _sprinting and dir != Vector3.ZERO and on_floor:
@@ -393,6 +401,8 @@ func _after_move(was_on_floor: bool, input: Vector2) -> void:
 		_climb_used = false
 		_last_run_n = Vector3.ZERO
 		skills.landed()
+		return
+	if _try_hang_or_zip(input):
 		return
 	if sm.state != "free" or not _can_act():
 		return
@@ -453,7 +463,10 @@ func _climb_update(delta: float) -> void:
 		if global_position.y >= _ledge_y + 0.05:
 			velocity = -_wall_n * float(t.mantle_fwd) + Vector3.UP * 1.2
 			_kick.x += deg_to_rad(4.0)
+			var follow := _mantle_attack
 			sm.go("free")
+			if follow != "":
+				_start_attack(follow)
 		return
 	_use_stamina(float(t.cost) * delta)
 	# 허리 높이 앞이 비었으면 꼭대기에 닿은 것 → 꼭대기 높이를 재고 짚는다
@@ -477,6 +490,7 @@ func _climb_update(delta: float) -> void:
 
 
 func _climb_exit() -> void:
+	_mantle_attack = ""
 	_pose_to(MoveSet.FP_POSES.rest, 0.18)
 
 
@@ -517,7 +531,7 @@ func _wallrun_exit() -> void:
 
 
 func is_on_wall_move() -> bool:
-	return sm.is_in(["climb", "wallrun", "grapple"])
+	return sm.is_in(["climb", "wallrun", "grapple", "hang", "zip"])
 
 
 ## 행동마다 이동 속도가 얼마나 느려지는지
@@ -685,6 +699,8 @@ func attack_released() -> void:
 ## kind: "combo"(연속 베기 다음 단계), "heavy", 또는 동작 이름
 func _request_attack(kind: String) -> void:
 	if dead or not controls_enabled:
+		return
+	if _vertical_attack(kind):
 		return
 	match sm.state:
 		"free", "block":
@@ -878,7 +894,12 @@ func _react(kind: String, from_dir: Vector3) -> void:
 ## 상대의 공격이 나에게 닿았을 때 불린다.
 ## info: {"damage", "react", "guard"} — 결과: "hit", "blocked", "parried", "dodged", "guard_broken"
 func receive_attack(info: Dictionary, attacker: Node3D) -> String:
+	if sm.state == "hang" and not dead:
+		var hung := _hit_while_hanging(info, attacker)
+		attack_received.emit(hung)
+		return hung
 	var result := _resolve_attack(info, attacker)
+	_after_received(result, info, attacker)
 	attack_received.emit(result)
 	return result
 
@@ -979,7 +1000,8 @@ func _check_hits(data: Dictionary) -> void:
 		to_target.y = 0
 		var hit_dir := to_target.normalized() if to_target.length() > 0.01 else fwd
 		var info := _hit_info.duplicate()
-		info.damage = int(round(float(info.damage) * build.damage_mult())) + randi_range(-2, 2)
+		info.damage = int(round(float(info.damage) * build.damage_mult() * vkit.damage_mult())) + randi_range(-2, 2)
+		info.power = vkit.powered()
 		var result = body.take_hit(info, hit_dir, self)
 		var contact := _blade_tip.global_position
 		match result:
@@ -1048,6 +1070,10 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 		target_fov = 82.0
 	elif sm.state == "grapple":
 		target_fov = 94.0
+	elif sm.state == "plunge":
+		target_fov = 96.0
+	elif sm.state == "zip":
+		target_fov = 90.0
 	elif sm.state == "charge":
 		target_fov = 78.0 - _charge_level * 6.0
 	elif sprinting and horiz > WALK_SPEED:
@@ -1258,3 +1284,327 @@ func _iron_exit() -> void:
 	_blade_mat.emission = Color(1.0, 0.72, 0.3)
 	_blade_mat.emission_energy_multiplier = 0.0
 	_pose_to(MoveSet.FP_POSES.rest, 0.15)
+
+
+# ---------------- 높이: 낙하 찍기, 공중 베기, 난간 매달리기, 짚라인, 밀려 떨어지기 ----------------
+# 공통 규칙과 수치는 scripts/combat/vertical_kit.gd, 기술 수치는 MoveSet 의 plunge / air_slash / ledge_slash.
+
+const PLUNGE_MIN_HEIGHT := 1.6   # 이만큼 떠 있어야 낙하 찍기
+const PLUNGE_SPEED := 22.0
+
+var _plunge_from := 0.0
+var _plunge_landed := false
+var _hang := {}
+var _hang_cd := 0.0
+var _mantle_attack := ""         # 난간에서 올라서자마자 쓸 기술
+var _zip: Zipline
+var _zip_t := 0.0
+var _zip_cd := 0.0
+var _zip_stall := 0.0
+
+
+## 공중, 난간, 짚라인에서 누른 공격. 처리했으면 true.
+func _vertical_attack(kind: String) -> bool:
+	if sm.state == "hang":
+		_mantle_from_hang("ledge_slash")
+		return true
+	if sm.state == "zip":
+		_zip_release(_zip.dir() * Zipline.SPEED * 0.6 if is_instance_valid(_zip) else Vector3.ZERO)
+		# 줄에서 손을 놓으며 그대로 아래로 찍거나 벤다
+	if is_on_floor() or not sm.is_in(["free", "dash", "wallrun", "climb"]):
+		return false
+	var h := vkit.height_above_ground(14.0)
+	var looking_down := head.rotation.x < deg_to_rad(-18)
+	if h >= PLUNGE_MIN_HEIGHT and (kind == "heavy" or looking_down or h >= 3.2):
+		if stamina < float(MoveSet.MOVES.plunge.cost) * 0.5:
+			return false
+		sm.go("plunge")
+		return true
+	if kind in ["combo", "light"] and h > 0.6:
+		_start_attack("air_slash")
+		return sm.state == "attack"
+	return false
+
+
+# --- 낙하 찍기 ---
+
+func _plunge_enter(_d: Dictionary) -> void:
+	var data: Dictionary = MoveSet.MOVES.plunge
+	_use_stamina(float(data.cost))
+	_plunge_from = global_position.y
+	_plunge_landed = false
+	_queued = ""
+	var fwd := -transform.basis.z
+	fwd.y = 0
+	velocity = fwd.normalized() * 2.5 + Vector3.UP * 2.0
+	_pose_to(data.fp.windup, float(data.windup))
+	_play("heavy", 0.75, -4.0)
+	attack_started.emit("plunge")
+
+
+func _plunge_update(delta: float) -> void:
+	var data: Dictionary = MoveSet.MOVES.plunge
+	if _plunge_landed:
+		if sm.time >= float(data.recover) * _atk_mult():
+			sm.go("free")
+		return
+	if sm.time < float(data.windup):
+		return
+	if sm.time - delta < float(data.windup):
+		_pose_to(data.fp.strike, 0.12, Tween.TRANS_CUBIC, Tween.EASE_IN)
+		_play("dash", 0.7, -4.0)
+	# 내리꽂으며 보는 쪽으로 조금 움직일 수 있다
+	var fwd := -transform.basis.z
+	fwd.y = 0
+	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back") if _can_act() else Vector2.ZERO
+	var steer := (transform.basis * Vector3(input.x, 0, input.y)) * 4.5 + fwd.normalized() * 1.5
+	velocity.x = lerpf(velocity.x, steer.x, clampf(delta * 6.0, 0, 1))
+	velocity.z = lerpf(velocity.z, steer.z, clampf(delta * 6.0, 0, 1))
+	velocity.y = -PLUNGE_SPEED
+	if is_on_floor() or sm.time > 2.5:
+		_plunge_impact()
+
+
+func _plunge_impact() -> void:
+	var data: Dictionary = MoveSet.MOVES.plunge
+	var drop := maxf(_plunge_from - global_position.y, 0.0) + 1.0
+	var k := clampf((drop - PLUNGE_MIN_HEIGHT) / 6.0, 0.0, 1.0)
+	var dmg := int(lerpf(float(data.damage), float(data.damage_max), k))
+	_plunge_landed = true
+	sm.time = 0.0
+	velocity = Vector3.ZERO
+	_shake = 0.6 + k * 0.5
+	_kick.x -= deg_to_rad(5.0 + k * 4.0)
+	_play("clang", 0.55, -1.0)
+	var feet := global_position + Vector3.UP * 0.1
+	Fx.impact(get_parent(), feet, Vector3.UP, Color(0.82, 0.74, 0.6), 26)
+	Fx.sparks(get_parent(), feet, Vector3.UP, 20, Color(1.0, 0.8, 0.45))
+	var q := PhysicsShapeQueryParameters3D.new()
+	var sph := SphereShape3D.new()
+	sph.radius = float(data.reach)
+	q.shape = sph
+	q.transform = Transform3D(Basis(), global_position + Vector3.UP * 0.7)
+	q.collision_mask = 2
+	q.exclude = [get_rid()]
+	var landed := false
+	for r in get_world_3d().direct_space_state.intersect_shape(q, 8):
+		var body: Object = r.collider
+		if body == null or not body.has_method("take_hit"):
+			continue
+		var to_t: Vector3 = (body as Node3D).global_position - global_position
+		to_t.y = 0
+		var dir := to_t.normalized() if to_t.length() > 0.05 else -transform.basis.z
+		var info := {"move": "plunge", "react": data.react, "guard": data.guard, "dir": data.get("dir", "high"),
+				"damage": int(round(dmg * build.damage_mult() * vkit.damage_mult())), "pressure": build.guard_pressure(),
+				"power": vkit.powered(), "knockdown": true}
+		var result = body.take_hit(info, dir, self)
+		if result in ["hit", "guard_broken"] and body is Duelist:
+			landed = true
+	if landed:
+		combat_event.emit("낙하 찍기!", Color(1.0, 0.75, 0.3))
+		_on_hit_landed(true)
+	vkit.reset_fall()
+
+
+func _plunge_exit() -> void:
+	_pose_to(MoveSet.FP_POSES.rest, 0.2)
+
+
+# --- 난간 매달리기 ---
+
+## 공중에서: 손이 닿는 짚라인을 잡거나, 눈앞 난간을 잡는다
+func _try_hang_or_zip(input: Vector2) -> bool:
+	if not _can_act():
+		return false
+	if arena and _zip_cd <= 0.0 and sm.is_in(["free", "wallrun", "climb"]):
+		var z := arena.zipline_near(global_position)
+		if not z.is_empty():
+			sm.go("zip", {"z": z[0], "t": z[1]})
+			return true
+	if _hang_cd > 0.0 or velocity.y > 0.5 or input.y > 0.3:
+		return false
+	if not (sm.state == "free" or (sm.state == "stagger" and sm.time > 0.25)):
+		return false
+	var ledge := vkit.find_ledge(-transform.basis.z)
+	if ledge.is_empty():
+		return false
+	sm.go("hang", ledge)
+	return true
+
+
+func _hang_enter(d: Dictionary) -> void:
+	_hang = d
+	_mantle_attack = ""
+	var n: Vector3 = d.n
+	var p: Vector3 = d.point
+	global_position = Vector3(p.x, float(d.y) - 1.55, p.z) + n * 0.42
+	velocity = Vector3.ZERO
+	vkit.reset_fall()
+	_pose_to(MoveSet.FP_POSES.hang, 0.1)
+	_play("dash", 0.7, -10.0)
+	combat_event.emit("매달림  Space 올라서기 · 클릭 뛰어올라 베기", Color(0.95, 0.92, 0.75))
+
+
+func _hang_update(delta: float) -> void:
+	velocity = Vector3.ZERO
+	_use_stamina(VerticalKit.HANG_COST * delta)
+	if not _can_act():
+		return
+	if Input.is_action_just_pressed("jump"):
+		_mantle_from_hang("")
+		return
+	if Input.is_action_pressed("move_back") or stamina <= 0.0 or sm.time > VerticalKit.HANG_MAX:
+		_drop_from_hang()
+
+
+func _hang_exit() -> void:
+	if sm.state != "climb":
+		_pose_to(MoveSet.FP_POSES.rest, 0.15)
+
+
+func _drop_from_hang() -> void:
+	_hang_cd = VerticalKit.HANG_COOLDOWN
+	velocity = (_hang.n as Vector3) * 1.5
+	sm.go("free")
+
+
+## 난간을 짚고 올라선다. attack 을 주면 올라서자마자 그 기술을 쓴다 (난간 반격).
+func _mantle_from_hang(attack: String) -> void:
+	var ledge_y: float = _hang.y
+	_wall_n = _hang.n
+	sm.go("climb")
+	_ledge_y = ledge_y
+	_mantle_attack = attack
+	if attack != "":
+		_pose_to(MoveSet.MOVES[attack].fp.windup, 0.15)
+		combat_event.emit("난간 반격!", Color(1.0, 0.75, 0.35))
+
+
+func is_hanging() -> bool:
+	return sm.state == "hang"
+
+
+## 매달려 있을 때 맞으면 막지 못하고 손을 놓친다
+func _hit_while_hanging(info: Dictionary, attacker: Node3D) -> String:
+	var to_a := attacker.global_position - global_position
+	to_a.y = 0
+	_take_damage(int(info.damage), to_a)
+	combat_event.emit("난간에서 떨어졌다!", Color(1.0, 0.5, 0.35))
+	_hang_cd = 1.0
+	var out: Vector3 = _hang.n
+	sm.go("free")
+	velocity = out * 2.5 + Vector3.DOWN
+	vkit.knock()
+	if not dead:
+		_react("flinch", Vector3.ZERO)
+	return "hit"
+
+
+# --- 짚라인 ---
+
+func _zip_enter(d: Dictionary) -> void:
+	_zip = d.z
+	_zip_t = d.t
+	_zip_stall = 0.0
+	_zip.rider_count += 1
+	_pose_to(MoveSet.FP_POSES.zip, 0.12)
+	_play("dash", 0.6, -6.0)
+
+
+func _zip_update(delta: float) -> void:
+	if not is_instance_valid(_zip) or not _zip.alive:
+		_zip_release(Vector3.ZERO)
+		return
+	_zip_t += Zipline.SPEED * delta / _zip.length()
+	if _zip_t >= 1.0:
+		_zip_release(_zip.dir() * 5.0 + Vector3.UP * 2.5)
+		return
+	var target := _zip.feet_at(_zip_t)
+	velocity = (target - global_position) / maxf(delta, 0.001)
+	# 무언가에 막히면 놓는다
+	if sm.time > 0.3 and get_real_velocity().length() < 2.0:
+		_zip_stall += delta
+		if _zip_stall > 0.2:
+			_zip_release(Vector3.ZERO)
+			return
+	if not _can_act():
+		return
+	if Input.is_action_just_pressed("jump"):
+		_zip_release(_zip.dir() * Zipline.SPEED * 0.7 + Vector3.UP * 4.5)
+	elif Input.is_action_pressed("move_back") and sm.time > 0.25:
+		_zip_release(_zip.dir() * Zipline.SPEED * 0.5)
+
+
+func _zip_release(v: Vector3) -> void:
+	velocity = v
+	_zip_cd = 0.6
+	vkit.reset_fall()
+	if sm.state == "zip":
+		sm.go("free")
+
+
+func _zip_exit() -> void:
+	if is_instance_valid(_zip):
+		_zip.rider_count -= 1
+	_pose_to(MoveSet.FP_POSES.rest, 0.15)
+
+
+# --- 밀려 떨어지기, 낭떠러지 ---
+
+## 강한 공격이나 던지기로 날려 보낸다 (다른 기술도 이 함수를 쓰면 낙하 피해가 따라온다)
+func apply_knockback(vec: Vector3) -> void:
+	velocity.x = vec.x
+	velocity.z = vec.z
+	velocity.y = maxf(velocity.y, vec.y)
+	vkit.knock()
+
+
+## 맞은 결과에 따라 날려 보내기와 넘어짐을 붙인다 (_resolve_attack 은 그대로 두고 바깥에서)
+func _after_received(result: String, info: Dictionary, attacker: Node3D) -> void:
+	if dead or not (result in ["hit", "guard_broken"]):
+		return
+	vkit.knock(VerticalKit.FLINCH_KNOCK_TIME)
+	var l := VerticalKit.launch_for(info)
+	if l != Vector2.ZERO:
+		var away := global_position - attacker.global_position
+		away.y = 0
+		away = away.normalized() if away.length() > 0.05 else transform.basis.z
+		apply_knockback(away * l.x + Vector3.UP * l.y)
+	if info.get("knockdown", false):
+		_react("knockdown", Vector3.ZERO)
+
+
+func _vertical_tick(delta: float) -> void:
+	_hang_cd = maxf(_hang_cd - delta, 0.0)
+	_zip_cd = maxf(_zip_cd - delta, 0.0)
+	var f := vkit.tick(delta, is_on_floor())
+	if f == -1:
+		_fall_into_void()
+	elif f > 0 and not dead:
+		_take_damage(f, Vector3.ZERO)
+		combat_event.emit("추락! -%d" % f, Color(1.0, 0.5, 0.3))
+		if not dead:
+			_react("knockdown", Vector3.ZERO)
+
+
+func _fall_into_void() -> void:
+	if sm.state != "free":
+		sm.go("free")
+	global_position = arena.safe_spawn(self) if arena else Vector3(0, 0.1, 0)
+	velocity = Vector3.ZERO
+	vkit.reset_fall()
+	_iframes = 1.0
+	_shake = 0.6
+	# 연습장에서는 다시 서기만 한다. 대결 중이면 큰 피해.
+	if arena and arena.director.running and not dead:
+		var dmg := int(ceilf(max_hp * VerticalKit.VOID_DAMAGE))
+		combat_event.emit("낭떠러지! -%d" % dmg, Color(1.0, 0.35, 0.3))
+		_take_damage(dmg, Vector3.ZERO)
+	else:
+		combat_event.emit("낭떠러지!", Color(1.0, 0.35, 0.3))
+
+
+func on_pickup(kind: String) -> void:
+	_play("charged", 1.3, -4.0)
+	if kind == "power":
+		_blade_mat.emission = Color(1.0, 0.55, 0.2)

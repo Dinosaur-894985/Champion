@@ -111,6 +111,7 @@ func _ready() -> void:
 	stamina = max_stamina
 	traits = {"wall_climb": build.has("wall")}
 	skills = SkillKit.new(self, build)
+	vkit = VerticalKit.new(self)
 	collision_layer = 2
 	collision_mask = 1
 	var col := CollisionShape3D.new()
@@ -147,6 +148,9 @@ func _ready() -> void:
 		.add("climb", _climb_enter, _climb_update) \
 		.add("grapple", _grapple_enter, _grapple_update, _grapple_exit) \
 		.add("iron", _iron_enter, _iron_update, _iron_exit) \
+		.add("plunge", _plunge_enter, _plunge_update) \
+		.add("hang", _hang_enter, _hang_update) \
+		.add("zip", _zip_enter, _zip_update) \
 		.add("dead")
 	_ray.collision_mask = 1
 	_build_rope()
@@ -168,7 +172,7 @@ var _turn_speed := TURN_SPEED
 
 
 func _physics_process(delta: float) -> void:
-	if not is_on_floor() and state not in ["climb", "grapple"]:
+	if not is_on_floor() and state not in ["climb", "grapple", "hang", "zip"]:
 		velocity.y -= _gravity * delta
 	if is_on_floor():
 		skills.landed()
@@ -208,6 +212,7 @@ func _physics_process(delta: float) -> void:
 	velocity.x = lerpf(velocity.x, mv.x, clampf(delta * 12.0, 0, 1))
 	velocity.z = lerpf(velocity.z, mv.z, clampf(delta * 12.0, 0, 1))
 	move_and_slide()
+	_vertical_tick(delta)
 
 
 func _regen(delta: float) -> void:
@@ -243,6 +248,8 @@ func _process(delta: float) -> void:
 
 func _think() -> void:
 	_think_t = randf_range(0.18, 0.35)
+	if _think_vertical():
+		return
 	if not _direct:
 		# 상대가 다른 층(지붕, 기둥 위)에 있으면: 갈고리가 있으면 줄을 걸어 날아가고, 아니면 길을 찾아 올라간다
 		if _dy > 1.5 and _try_grapple_to_target():
@@ -366,7 +373,7 @@ func _neutral_update(delta: float) -> void:
 		_think()
 		if state not in ["approach", "circle"]:
 			return
-	if not _direct:
+	if _needs_nav():
 		_move = _nav_move(delta)
 		return
 	_path.clear()
@@ -378,6 +385,7 @@ func _neutral_update(delta: float) -> void:
 		if stamina < 22.0:
 			keep = (_dist - 4.0) * 1.5   # 숨 고르는 중엔 멀찍이
 		_move = side * _strafe_dir * STRAFE_SPEED * build.speed_mult() + _dir * keep
+	_move = _edge_guard(_move)
 
 
 func _start_attack(kind: String) -> void:
@@ -534,6 +542,8 @@ func _stagger(t: float, big: bool = true) -> void:
 func _check_direct() -> bool:
 	if arena == null:
 		return true
+	if target.is_hanging() and _dist < 3.5 and _dy > -2.4:
+		return true
 	if absf(_dy) > 1.0:
 		return false
 	if arena.area_of(global_position) != arena.area_of(target.global_position):
@@ -547,9 +557,11 @@ func _check_direct() -> bool:
 ## 길목 점을 따라 움직일 방향. 벽 오르기/점프가 필요한 곳에서는 그 동작을 시작한다.
 func _nav_move(delta: float) -> Vector3:
 	_repath_t -= delta
+	if _riding_lift() and _path_i < _path.size() and _path[_path_i].kind == "lift":
+		_repath_t = maxf(_repath_t, 0.3)   # 발판을 타고 있는 동안에는 길을 다시 찾지 않는다
 	if _repath_t <= 0.0 or _path_i >= _path.size():
 		_repath_t = 0.6
-		_path = arena.find_path(global_position, target.global_position, traits.get("wall_climb", false))
+		_path = arena.find_path(global_position, _nav_goal(), traits.get("wall_climb", false))
 		# 길이 너무 멀면 갈고리로 지름길
 		if _path.size() > 6 and _try_grapple_to_target():
 			return Vector3.ZERO
@@ -576,6 +588,9 @@ func _nav_move(delta: float) -> Vector3:
 	var dir := to / maxf(hd, 0.001)
 	_face = dir
 	_check_stuck(delta)
+	var special = _nav_special(wp, dir, hd)
+	if special != null:
+		return special
 	match wp.kind:
 		"climb":
 			if dy > 0.6 and hd < 1.9 and is_on_floor():
@@ -621,6 +636,13 @@ func _climb_update(_delta: float) -> void:
 		_push = _climb_dir * 4.0
 		_path_i += 1
 		_back_to_neutral()
+		if _after_climb_attack != "":
+			# 난간에서 뛰어오르며 벤다
+			var follow := _after_climb_attack
+			_after_climb_attack = ""
+			_combo_left = 0
+			_start_attack(follow)
+			return
 		sm.go("approach")
 		return
 	# 벽에 안 붙었거나 너무 오래 걸리면 포기 (떨어진다)
@@ -634,7 +656,10 @@ func _climb_update(_delta: float) -> void:
 # ---------------- 공격 맞히기 ----------------
 
 func _try_hit(data: Dictionary) -> void:
-	if _dist > float(data.reach) + 0.15 or absf(_dy) > 1.4:
+	if _try_smash(data):
+		return
+	var reach_dy := 2.4 if target.is_hanging() else 1.4
+	if _dist > float(data.reach) + 0.15 or absf(_dy) > reach_dy:
 		return
 	var facing := -global_transform.basis.z
 	facing.y = 0
@@ -642,7 +667,8 @@ func _try_hit(data: Dictionary) -> void:
 		return
 	_hit_done = true
 	var info := {
-		"move": _attack, "damage": int(round(float(data.damage) * build.damage_mult())) + randi_range(-2, 2),
+		"move": _attack, "damage": int(round(float(data.damage) * build.damage_mult() * vkit.damage_mult())) + randi_range(-2, 2),
+		"power": vkit.powered(),
 		"react": data.react, "guard": data.get("ai_guard", data.guard), "pressure": build.guard_pressure(),
 	}
 	var result := target.receive_attack(info, self)
@@ -665,7 +691,12 @@ func _try_hit(data: Dictionary) -> void:
 ## 플레이어의 칼에 닿았을 때 불린다. info: {"damage", "react", "guard"}
 ## 결과: "hit", "blocked", "parried", "dodged"
 func take_hit(info: Dictionary, dir: Vector3, _attacker: Node3D = null) -> String:
-	var r := _take_hit(info, dir)
+	var r := ""
+	if state == "hang" and not dead:
+		r = _hit_while_hanging(info, dir)
+	else:
+		r = _take_hit(info, dir)
+		_after_hit(r, info, dir)
 	stats["got_" + r] = stats.get("got_" + r, 0) + 1
 	return r
 
@@ -987,3 +1018,480 @@ func _iron_update(_delta: float) -> void:
 
 func _iron_exit() -> void:
 	rig.glow(rig.blade_mat.emission, 0.0)
+
+
+# ---------------- 높이: 높은 곳, 아이템, 낭떠러지, 낙하 찍기, 난간, 짚라인, 발판 ----------------
+# 공통 규칙은 scripts/combat/vertical_kit.gd. 플레이어와 같은 규칙을 쓴다.
+
+var vkit: VerticalKit
+var _seek: ArenaPickup = null       # 노리는 아이템
+var _plunge_landed := false
+var _plunge_from := 0.0
+var _hang := {}
+var _hang_hold := 0.5
+var _hang_cd := 0.0
+var _after_climb_attack := ""
+var _zip: Zipline
+var _zip_t := 0.0
+var _zip_want := -1                 # 이 번호 짚라인을 잡으려고 뛰었다
+var _zip_want_t := 0.0
+var _smash: BreakablePillar = null  # 상대가 올라선 부서지는 기둥 (벽을 못 타면 부숴서 떨어뜨린다)
+
+
+## 평소 판단 전에: 높이와 경기장을 이용할 기회가 있으면 쓰고 true
+func _think_vertical() -> bool:
+	if arena == null:
+		return false
+	_smash = null
+	# 무너질 바닥에 서 있으면 먼저 빠져나간다
+	if arena.is_doomed(global_position):
+		_seek = null
+		sm.go("approach")
+		return true
+	# 매달린 상대: 바로 베서 떨어뜨린다
+	if target.is_hanging() and _dist < 2.6 and _dy > -2.4:
+		_combo_left = 0
+		_start_attack("slash1")
+		stats["stomp"] = stats.get("stomp", 0) + 1
+		return true
+	# 높은 곳에서 아래 상대에게 낙하 찍기
+	var plunge_cost: float = MoveSet.MOVES.plunge.cost
+	if _dy < -1.8 and _dy > -9.0 and _dist < 6.5 and is_on_floor() and stamina > plunge_cost \
+			and randf() < 0.6 and _clear_line_to_target():
+		_leap_plunge()
+		return true
+	# 아이템 다툼
+	var pk := arena.director.best_pickup_for(self, target) if arena.director else null
+	if pk and _want_pickup(pk):
+		_seek = pk
+		sm.go("approach")
+		return true
+	_seek = null
+	# 상대가 낭떠러지나 높은 곳 끝에 서 있으면 날려 보내는 공격
+	if _direct and _dist < 2.9 and stamina > 28.0 and randf() < 0.55 and _target_near_edge():
+		_combo_left = 0
+		_start_attack("heavy" if randf() < 0.6 else "charge")
+		stats["edge_push"] = stats.get("edge_push", 0) + 1
+		return true
+	# 상대가 부서지는 기둥 위에 있는데 올라갈 수 없으면 기둥을 부순다
+	if not _direct and not traits.get("wall_climb", false):
+		var area := arena.area_of(target.global_position)
+		if arena.breakables.has(area):
+			var bp: BreakablePillar = arena.breakables[area]
+			var to_b := bp.global_position - global_position
+			to_b.y = 0
+			if not bp.is_broken() and to_b.length() < 2.6:
+				_smash = bp
+				_combo_left = 2
+				_start_attack("slash1")
+				return true
+	return false
+
+
+func _want_pickup(pk: ArenaPickup) -> bool:
+	var d_me := global_position.distance_to(pk.global_position)
+	var d_t := target.global_position.distance_to(pk.global_position)
+	if _dist < 2.4 and absf(_dy) < 1.0:
+		return false   # 바로 앞에서 싸우는 중이면 싸움부터
+	if pk.kind == "heal" and hp < max_hp * 0.75 and d_me < 24.0:
+		return true
+	return d_me < d_t + 2.5 and d_me < 18.0
+
+
+func _seeking() -> bool:
+	return _seek != null and is_instance_valid(_seek) and not _seek.taken
+
+
+## 길찾기 목표: 무너질 곳이면 안전한 곳, 아이템을 노리면 아이템, 아니면 상대
+func _nav_goal() -> Vector3:
+	if arena and arena.is_doomed(global_position):
+		return arena.safe_spawn(self)
+	if _seeking():
+		return _seek.global_position
+	return target.global_position
+
+
+func _needs_nav() -> bool:
+	return not _direct or _seeking() or (arena != null and arena.is_doomed(global_position))
+
+
+## 상대 뒤쪽이 낭떠러지거나 높은 곳 끝인가
+func _target_near_edge() -> bool:
+	var away := target.global_position - global_position
+	away.y = 0
+	if away.length() < 0.1:
+		return false
+	var p := target.global_position + away.normalized() * 2.2
+	return not vkit.ground_near(p, 2.6)
+
+
+## 뛰어내릴 앞쪽이 막혀 있지 않나 (벽이나 기둥이 없고, 상대가 선 곳에 바닥이 있다)
+func _clear_line_to_target() -> bool:
+	_ray.exclude = [get_rid(), target.get_rid()]
+	_ray.from = global_position + Vector3.UP * 1.0
+	_ray.to = _ray.from + _dir * minf(_dist, 2.5)
+	if not get_world_3d().direct_space_state.intersect_ray(_ray).is_empty():
+		return false
+	return vkit.ground_near(target.global_position, 1.0)
+
+
+## 걸어가는 쪽이 낭떠러지(또는 곧 무너질 바닥)면 옆으로 비키거나 멈춘다
+func _edge_guard(mv: Vector3) -> Vector3:
+	if arena == null or mv.length() < 0.3 or not is_on_floor():
+		return mv
+	var ahead := global_position + Vector3(mv.x, 0, mv.z).normalized() * 1.3
+	var doomed_ahead := arena.is_doomed(ahead) and not arena.is_doomed(global_position)
+	if not doomed_ahead and vkit.ground_near(ahead, 2.2):
+		return mv
+	stats["edge_avoid"] = stats.get("edge_avoid", 0) + 1
+	var side := Vector3(-mv.z, 0, mv.x).normalized()
+	for s in [1.0, -1.0]:
+		var q: Vector3 = global_position + side * s * 1.3
+		if vkit.ground_near(q, 2.2) and not (arena.is_doomed(q) and not arena.is_doomed(global_position)):
+			return side * s * mv.length() * 0.8
+	return Vector3.ZERO
+
+
+# --- 낙하 찍기 ---
+
+var _leap_v := Vector3.ZERO
+
+
+func _leap_plunge() -> void:
+	var fall := maxf(-_dy, 0.5)
+	var t := sqrt(2.0 * fall / _gravity) + 0.35
+	_leap_v = _dir * clampf(_dist / t, 2.0, 8.0)
+	velocity = _leap_v + Vector3.UP * 3.5
+	_attack = "plunge"
+	stats["move_plunge"] = stats.get("move_plunge", 0) + 1
+	spend_stamina(float(MoveSet.MOVES.plunge.cost))
+	sm.go("plunge")
+
+
+func _plunge_enter(_d: Dictionary) -> void:
+	_plunge_landed = false
+	_plunge_from = global_position.y
+	_combo_left = 0
+	rig.set_pose(MoveSet.MOVES.plunge.body.windup, 10.0)
+	rig.glow(Color(1.0, 0.15, 0.1), 3.0)
+	_play("warn_heavy", -2.0)
+	combat_event.emit("위에서 내려온다!", Color(1.0, 0.45, 0.3))
+
+
+func _plunge_update(_delta: float) -> void:
+	var data: Dictionary = MoveSet.MOVES.plunge
+	if _plunge_landed:
+		_turn_speed = 2.0
+		if _state_t >= float(data.ai_recover) * _atk_mult():
+			_back_to_neutral()
+		return
+	_face = _dir
+	# 상대 쪽으로 몸을 틀며 내려간다
+	_move = _leap_v.lerp(_dir * clampf(_dist * 2.5, 0.0, 8.0), 0.5)
+	if _state_t > 0.3 or velocity.y < 0.0:
+		velocity.y = minf(velocity.y, -16.0)
+		rig.set_pose(data.body.strike, 18.0)
+	if is_on_floor() and _state_t > 0.1:
+		_plunge_impact()
+	elif _state_t > 3.0:
+		_back_to_neutral()
+
+
+func _plunge_impact() -> void:
+	var data: Dictionary = MoveSet.MOVES.plunge
+	_plunge_landed = true
+	sm.time = 0.0
+	velocity = Vector3.ZERO
+	_move = Vector3.ZERO
+	_leap_v = Vector3.ZERO
+	_play("hit_heavy", 0.0)
+	Fx.impact(get_parent(), global_position + Vector3.UP * 0.1, Vector3.UP, Color(0.82, 0.74, 0.6), 26)
+	rig.glow(rig.blade_mat.emission, 0.0)
+	var drop := maxf(_plunge_from - global_position.y, 0.0) + 1.0
+	var dmg := int(lerpf(float(data.damage), float(data.damage_max), clampf((drop - 1.6) / 6.0, 0.0, 1.0)))
+	var to_t := target.global_position - global_position
+	var dy := to_t.y
+	to_t.y = 0
+	if to_t.length() <= float(data.reach) and absf(dy) < 1.5:
+		var info := {"move": "plunge", "damage": int(round(dmg * build.damage_mult() * vkit.damage_mult())),
+				"react": data.react, "guard": data.guard, "dir": data.get("dir", "high"),
+				"pressure": build.guard_pressure(), "power": vkit.powered(), "knockdown": true}
+		var result := target.receive_attack(info, self)
+		if result in ["hit", "guard_broken"]:
+			stats["plunge_hit"] = stats.get("plunge_hit", 0) + 1
+			Fx.impact(get_parent(), target.global_position + Vector3(0, 1.3, 0), Vector3.UP, Color(0.75, 0.1, 0.08), 18)
+		elif result == "dodged":
+			_dodged_by_target += 1
+	vkit.reset_fall()
+
+
+# --- 난간 매달리기 ---
+
+func _try_hang() -> bool:
+	if _hang_cd > 0.0 or velocity.y > -1.0 or is_on_floor():
+		return false
+	if not (state in ["idle", "approach", "circle", "recover"] or (state == "stagger" and _state_t > 0.2)):
+		return false
+	var ledge := vkit.find_ledge(-global_transform.basis.z)
+	if ledge.is_empty():
+		var back := Vector3(-_push.x, 0, -_push.z)
+		if back.length() > 0.5:
+			ledge = vkit.find_ledge(back)
+	if ledge.is_empty():
+		return false
+	sm.go("hang", ledge)
+	return true
+
+
+func _hang_enter(d: Dictionary) -> void:
+	_hang = d
+	var n: Vector3 = d.n
+	var p: Vector3 = d.point
+	global_position = Vector3(p.x, float(d.y) - 1.35, p.z) + n * 0.45
+	velocity = Vector3.ZERO
+	_push = Vector3.ZERO
+	rotation.y = atan2(n.x, n.z)
+	_hang_hold = randf_range(0.35, 0.9)
+	vkit.reset_fall()
+	rig.set_pose(MoveSet.BODY_POSES.hang, 12.0)
+	rig.glow(rig.blade_mat.emission, 0.0)
+	stats["hang"] = stats.get("hang", 0) + 1
+	combat_event.emit("상대가 난간에 매달렸다!", Color(1.0, 0.8, 0.5))
+
+
+func _hang_update(delta: float) -> void:
+	_move = Vector3.ZERO
+	velocity = Vector3.ZERO
+	_face = -(_hang.n as Vector3)
+	_turn_speed = 20.0
+	spend_stamina(VerticalKit.HANG_COST * delta)
+	if _state_t < _hang_hold:
+		return
+	var ledge_y: float = _hang.y
+	var lp: Vector3 = _hang.point
+	var t_flat := Vector2(target.global_position.x - lp.x, target.global_position.z - lp.z).length()
+	# 상대가 난간 위 바로 앞에 있으면 뛰어오르며 벤다
+	if t_flat < 3.2 and absf(target.global_position.y - ledge_y) < 0.6 and stamina > 8.0:
+		_after_climb_attack = "ledge_slash"
+	sm.go("climb", {"top": ledge_y, "dir": -(_hang.n as Vector3)})
+
+
+func _hit_while_hanging(info: Dictionary, dir: Vector3) -> String:
+	_apply_damage(int(info.damage), dir, false)
+	if dead:
+		return "hit"
+	_hang_cd = 1.0
+	_push = (_hang.n as Vector3) * 2.5
+	velocity = Vector3.DOWN
+	vkit.knock()
+	combat_event.emit("상대가 난간에서 떨어진다!", Color(1.0, 0.8, 0.4))
+	_stagger(MoveSet.REACTIONS.flinch.time, false)
+	return "hit"
+
+
+# --- 짚라인 ---
+
+func _zip_enter(d: Dictionary) -> void:
+	_zip = d.z
+	_zip_t = d.t
+	_zip.rider_count += 1
+	rig.set_pose(MoveSet.BODY_POSES.climb, 12.0)
+	stats["zip"] = stats.get("zip", 0) + 1
+	_play("dash", -4.0)
+
+
+func _zip_update(delta: float) -> void:
+	if not is_instance_valid(_zip) or not _zip.alive:
+		_zip_leave(Vector3.ZERO)
+		return
+	_zip_t += Zipline.SPEED * delta / _zip.length()
+	var zdir := _zip.dir()
+	_face = Vector3(zdir.x, 0, zdir.z).normalized()
+	_turn_speed = 12.0
+	# 지나가는 길 아래에 상대가 있으면 손을 놓고 내리꽂는다
+	var below := global_position.y - target.global_position.y
+	if below > 2.0 and _dist < 3.0 and stamina > float(MoveSet.MOVES.plunge.cost) * 0.5:
+		_zip_leave(Vector3.ZERO)
+		_leap_v = _dir * 2.0
+		_attack = "plunge"
+		stats["move_plunge"] = stats.get("move_plunge", 0) + 1
+		spend_stamina(float(MoveSet.MOVES.plunge.cost))
+		sm.go("plunge")
+		return
+	if _zip_t >= 1.0:
+		_zip_leave(zdir * 5.0 + Vector3.UP * 2.0)
+		_path_i += 1
+		_back_to_neutral()
+		sm.go("approach")
+		return
+	var v := (_zip.feet_at(_zip_t) - global_position) / maxf(delta, 0.001)
+	velocity = v
+	_move = Vector3(v.x, 0, v.z)
+
+
+func _zip_leave(v: Vector3) -> void:
+	if is_instance_valid(_zip):
+		_zip.rider_count -= 1
+	_zip = null
+	velocity = v
+	_push = Vector3(v.x, 0, v.z)
+	vkit.reset_fall()
+
+
+# --- 발판과 짚라인 길 ---
+
+## 길이 '발판' 이나 '짚라인' 일 때 움직일 방향. 처리할 게 아니면 null 대신 ZERO 와 false.
+func _nav_special(wp: Dictionary, dir: Vector3, hd: float) -> Variant:
+	# 다음 길이 발판이면, 발판이 내 높이에 와서 멈춰 있을 때만 올라선다 (밑에 서 있으면 내려오지 못한다)
+	if wp.kind != "lift" and _path_i + 1 < _path.size() and _path[_path_i + 1].kind == "lift":
+		var nl: ArenaLift = arena.lifts[_path[_path_i + 1].ref]
+		var nc := nl.center()
+		var noff := Vector2(global_position.x - nc.x, global_position.z - nc.z)
+		var riding := noff.length() < 1.0 and absf(global_position.y - nl.surface_y()) < 0.4
+		if not riding and not nl.resting_at(global_position.y):
+			_stuck_t = 0.0
+			if noff.length() < 2.3:
+				if noff.length() < 0.2:
+					noff = Vector2(1, 0)
+				return Vector3(noff.x, 0, noff.y).normalized() * 3.0
+			return dir * _speed() if noff.length() > 3.2 else Vector3.ZERO
+	match wp.kind:
+		"lift":
+			var lift: ArenaLift = arena.lifts[wp.ref]
+			var c := lift.center()
+			var off := Vector2(global_position.x - c.x, global_position.z - c.z)
+			_stuck_t = 0.0
+			if off.length() < 1.0 and absf(global_position.y - lift.surface_y()) < 0.4:
+				# 타고 있다: 가운데에 서서 기다린다
+				return Vector3(c.x - global_position.x, 0, c.z - global_position.z) * 2.0
+			if lift.resting_at(global_position.y):
+				return dir * _speed()
+			# 발판이 오기를 옆에서 기다린다 (밑에 서 있으면 내려오지 않는다)
+			if off.length() < 2.1:
+				if off.length() < 0.3:
+					var prev: Vector3 = _path[maxi(_path_i - 1, 0)].pos if _path_i > 0 else global_position + Vector3.RIGHT
+					off = Vector2(global_position.x - c.x, global_position.z - c.z) + Vector2(prev.x - c.x, prev.z - c.z).normalized() * 0.5
+					if off.length() < 0.3:
+						off = Vector2(1, 0)
+				return Vector3(off.x, 0, off.y).normalized() * 3.0
+			return Vector3.ZERO
+		"zip":
+			var z: Zipline = arena.ziplines[wp.ref]
+			if not z.alive:
+				_repath_t = 0.0
+				return Vector3.ZERO
+			var start := Vector2(z.a.x - global_position.x, z.a.z - global_position.z)
+			if start.length() < 1.4 and is_on_floor():
+				velocity.y = 5.6
+				_zip_want = wp.ref
+				_zip_want_t = 0.0
+				return Vector3.ZERO
+			var to := Vector3(start.x, 0, start.y)
+			_face = to.normalized()
+			return to.normalized() * _speed()
+	return null
+
+
+# --- 매 프레임 (move_and_slide 다음) ---
+
+func _vertical_tick(delta: float) -> void:
+	_hang_cd = maxf(_hang_cd - delta, 0.0)
+	if _zip_want >= 0:
+		_zip_want_t += delta
+		if not is_on_floor() and state != "zip" and arena:
+			var z: Zipline = arena.ziplines[_zip_want]
+			var t := z.grab_t(global_position)
+			if t >= 0.0:
+				_zip_want = -1
+				sm.go("zip", {"z": z, "t": t})
+		elif _zip_want_t > 0.4 and is_on_floor():
+			_zip_want = -1
+			_repath_t = 0.0
+	if active and not dead and arena:
+		_try_hang()
+	var f := vkit.tick(delta, is_on_floor())
+	if f == -1:
+		_fall_into_void()
+	elif f > 0 and not dead:
+		_apply_damage(f, Vector3.ZERO, true)
+		combat_event.emit("상대 추락! -%d" % f, Color(1.0, 0.8, 0.4))
+		stats["fall_damage"] = stats.get("fall_damage", 0) + f
+		if not dead:
+			_stagger(MoveSet.REACTIONS.knockdown.time)
+
+
+func _fall_into_void() -> void:
+	stats["void"] = stats.get("void", 0) + 1
+	if state == "zip":
+		_zip_leave(Vector3.ZERO)
+	global_position = arena.safe_spawn(self) if arena else Vector3(0, 0.1, 0)
+	velocity = Vector3.ZERO
+	_push = Vector3.ZERO
+	vkit.reset_fall()
+	_iframes = 1.0
+	_repath_t = 0.0
+	if arena and arena.director.running and not dead:
+		var dmg := int(ceilf(max_hp * VerticalKit.VOID_DAMAGE))
+		combat_event.emit("상대가 낭떠러지로! -%d" % dmg, Color(1.0, 0.85, 0.35))
+		_apply_damage(dmg, Vector3.ZERO, true)
+		if not dead:
+			_back_to_neutral()
+
+
+## 맞은 결과에 따라 날려 보내기와 넘어짐을 붙인다 (_take_hit 은 그대로 두고 바깥에서)
+func _after_hit(result: String, info: Dictionary, dir: Vector3) -> void:
+	if dead or result != "hit":
+		return
+	vkit.knock(VerticalKit.FLINCH_KNOCK_TIME)
+	var l := VerticalKit.launch_for(info)
+	if l != Vector2.ZERO:
+		apply_knockback(Vector3(dir.x, 0, dir.z).normalized() * l.x + Vector3.UP * l.y)
+	if info.get("knockdown", false):
+		_stagger(MoveSet.REACTIONS.knockdown.time)
+
+
+## 강한 공격이나 던지기로 날려 보낸다
+func apply_knockback(vec: Vector3) -> void:
+	_push = Vector3(vec.x, 0, vec.z)
+	velocity.x = vec.x
+	velocity.z = vec.z
+	velocity.y = maxf(velocity.y, vec.y)
+	vkit.knock()
+
+
+func is_hanging() -> bool:
+	return state == "hang"
+
+
+func on_pickup(kind: String) -> void:
+	_seek = null
+	_play("clang", -4.0)
+	if kind == "power":
+		rig.glow(Color(1.0, 0.55, 0.2), 1.5)
+
+
+## 부서지는 기둥을 노리고 휘두를 때: 기둥에 닿으면 true
+func _try_smash(data: Dictionary) -> bool:
+	if _smash == null or not is_instance_valid(_smash) or _smash.is_broken():
+		return false
+	var to_b := _smash.global_position - global_position
+	to_b.y = 0
+	if to_b.length() > float(data.reach) + 1.0:
+		return false
+	_hit_done = true
+	var info := {"move": _attack, "damage": int(data.damage), "react": data.react, "guard": data.guard}
+	_smash.take_hit(info, to_b.normalized(), self)
+	stats["smash"] = stats.get("smash", 0) + 1
+	return true
+
+
+## 지금 올라타 있는 발판이 있나
+func _riding_lift() -> bool:
+	if arena == null:
+		return false
+	for l in arena.lifts:
+		var c := l.center()
+		if absf(global_position.x - c.x) < 1.15 and absf(global_position.z - c.z) < 1.15 \
+				and absf(global_position.y - l.surface_y()) < 0.4:
+			return true
+	return false

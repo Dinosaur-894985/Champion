@@ -43,6 +43,11 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/smoke_test.gd 2>&1 | tee smoke.log
           grep -q "SMOKE => OK" smoke.log
 
+      - name: 자동 점검 (높이, 낙하 찍기, 난간, 짚라인, 아이템, 바닥 붕괴)
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/vertical_test.gd 2>&1 | tee vertical.log
+          grep -q "VERTICAL => OK" vertical.log
+
       - name: Windows 실행 파일 만들기
         run: |
           mkdir -p build/windows
