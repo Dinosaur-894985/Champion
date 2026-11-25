@@ -1,6 +1,6 @@
 class_name Game
 extends Node3D
-## 게임 전체: 경기장(하늘, 바닥, 울타리, 나무)을 만들고, 모드에 따라
+## 게임 전체: 하늘과 빛, 경기장(scripts/arena.gd)을 만들고, 모드에 따라
 ## 연습(허수아비) 또는 대결(AI 결투사)을 시작한다.
 
 const HUD_SCRIPT := preload("res://scripts/hud.gd")
@@ -9,6 +9,7 @@ const HUD_SCRIPT := preload("res://scripts/hud.gd")
 static var next_mode := ""
 
 var mode := "practice"
+var arena: Arena
 var player: Player
 var duelist: Duelist
 var hud: CanvasLayer
@@ -21,8 +22,8 @@ func _ready() -> void:
 	Engine.time_scale = 1.0
 	_setup_inputs()
 	_build_environment()
-	_build_arena()
-	_build_props()
+	arena = Arena.new()
+	add_child(arena)
 
 	var first_launch := next_mode == ""
 	mode = "practice" if first_launch else next_mode
@@ -69,10 +70,11 @@ func _setup_practice() -> void:
 
 
 func _setup_duel() -> void:
-	player.position = Vector3(0, 0.1, 3.5)
+	player.position = Vector3(0, 0.1, 6.0)
 	hud.set_mode("duel")
 	duelist = Duelist.new()
-	duelist.position = Vector3(0, 0.1, -5.5)
+	duelist.position = Vector3(0, 0.1, -6.0)
+	duelist.arena = arena
 	add_child(duelist)
 	duelist.target = player
 	player.attack_started.connect(duelist.on_target_attack)
@@ -201,10 +203,10 @@ func _bind_mouse(action: String, button: MouseButton) -> void:
 
 func _build_environment() -> void:
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.32, 0.52, 0.80)
-	sky_mat.sky_horizon_color = Color(0.78, 0.80, 0.82)
-	sky_mat.ground_horizon_color = Color(0.62, 0.62, 0.58)
-	sky_mat.ground_bottom_color = Color(0.25, 0.27, 0.22)
+	sky_mat.sky_top_color = Color(0.30, 0.58, 0.90)
+	sky_mat.sky_horizon_color = Color(0.86, 0.90, 0.93)
+	sky_mat.ground_horizon_color = Color(0.80, 0.82, 0.78)
+	sky_mat.ground_bottom_color = Color(0.45, 0.52, 0.40)
 	sky_mat.sun_angle_max = 20.0
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
@@ -212,10 +214,13 @@ func _build_environment() -> void:
 	var env := Environment.new()
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
+	# 주변광은 하늘색을 반만 섞고 나머지는 따뜻한 흰빛 → 밝은 바닥이 파랗게 물들지 않는다
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.ambient_light_energy = 0.9
+	env.ambient_light_sky_contribution = 0.45
+	env.ambient_light_color = Color(0.86, 0.84, 0.80)
+	env.ambient_light_energy = 0.7
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
-	env.tonemap_exposure = 1.05
+	env.tonemap_exposure = 0.85
 	env.ssao_enabled = true
 	env.ssao_radius = 0.8
 	env.ssao_intensity = 1.6
@@ -223,17 +228,17 @@ func _build_environment() -> void:
 	env.glow_intensity = 0.35
 	env.glow_bloom = 0.05
 	env.fog_enabled = true
-	env.fog_light_color = Color(0.72, 0.78, 0.85)
-	env.fog_density = 0.006
+	env.fog_light_color = Color(0.84, 0.88, 0.93)
+	env.fog_density = 0.004
 	env.fog_aerial_perspective = 0.4
 	env.adjustment_enabled = true
 	env.adjustment_saturation = 1.08
 
 	# 웹(호환 렌더러)에서는 같은 설정이 더 밝고 물빠져 보여서 조금 눌러 준다
-	var compat := OS.has_feature("web")
+	var compat: bool = RenderingServer.get_rendering_device() == null   # 웹, 또는 그래픽 카드가 오래돼 호환 모드로 켜진 경우
 	if compat:
-		env.tonemap_exposure = 0.78
-		env.ambient_light_energy = 0.55
+		env.tonemap_exposure = 0.62
+		env.ambient_light_energy = 0.5
 		env.adjustment_saturation = 1.2
 		env.adjustment_contrast = 1.08
 
@@ -242,183 +247,10 @@ func _build_environment() -> void:
 	add_child(world_env)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-48, -35, 0)
-	sun.light_color = Color(1.0, 0.95, 0.86)
-	sun.light_energy = 1.0 if compat else 1.25
+	sun.rotation_degrees = Vector3(-52, -30, 0)
+	sun.light_color = Color(1.0, 0.94, 0.84)
+	sun.light_energy = 0.75 if compat else 1.0
 	sun.shadow_enabled = true
 	sun.shadow_blur = 1.2
-	sun.directional_shadow_max_distance = 60.0
+	sun.directional_shadow_max_distance = 70.0
 	add_child(sun)
-
-
-# ---------------- 바닥과 경기장 ----------------
-
-func _build_arena() -> void:
-	var grass := LowPoly.mat(Color(0.36, 0.50, 0.27), 0.95)
-	var grass2 := LowPoly.mat(Color(0.42, 0.55, 0.30), 0.95)
-	var dirt := LowPoly.mat(Color(0.58, 0.48, 0.36), 0.95)
-	var stone := LowPoly.mat(Color(0.56, 0.55, 0.52), 0.9)
-	var stone_dark := LowPoly.mat(Color(0.44, 0.43, 0.41), 0.9)
-
-	# 넓은 풀밭 (울퉁불퉁하게)
-	var ground_mesh := PlaneMesh.new()
-	ground_mesh.size = Vector2(120, 120)
-	ground_mesh.subdivide_width = 30
-	ground_mesh.subdivide_depth = 30
-	var ground := LowPoly.part(self, ground_mesh, grass, Vector3(0, -0.05, 0), Vector3.ZERO, 0.0)
-	ground.mesh = _bumpy_ground(ground_mesh)
-	_static_box(Vector3(0, -0.5, 0), Vector3(120, 1, 120))
-
-	# 가운데 흙 마당 (원형)
-	LowPoly.part(self, LowPoly.cyl(14.0, 14.2, 0.1, 28), dirt, Vector3(0, 0.0, 0), Vector3.ZERO, 0.04, 3)
-	# 돌로 된 원형 단
-	LowPoly.part(self, LowPoly.cyl(6.5, 6.8, 0.12, 20), stone, Vector3(0, 0.04, -1.5))
-	LowPoly.part(self, LowPoly.cyl(6.0, 6.0, 0.03, 20), stone_dark, Vector3(0, 0.095, -1.5))
-	var platform := StaticBody3D.new()
-	var pcol := CollisionShape3D.new()
-	var pshape := CylinderShape3D.new()
-	pshape.radius = 6.6
-	pshape.height = 0.2
-	pcol.shape = pshape
-	platform.position = Vector3(0, 0.0, -1.5)
-	platform.add_child(pcol)
-	add_child(platform)
-
-	# 풀 덤불
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 42
-	for i in 140:
-		var a := rng.randf() * TAU
-		var r := rng.randf_range(15.0, 45.0)
-		var p := Vector3(cos(a) * r, 0, sin(a) * r)
-		var h := rng.randf_range(0.25, 0.6)
-		LowPoly.part(self, LowPoly.cyl(0.0, rng.randf_range(0.2, 0.45), h, 5), grass2 if i % 2 else grass,
-				p + Vector3(0, h * 0.5 - 0.05, 0), Vector3(0, rng.randf() * 90, 0), 0.05, i)
-
-
-func _bumpy_ground(src: PlaneMesh) -> ArrayMesh:
-	var arrays := src.get_mesh_arrays()
-	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	for i in verts.size():
-		var v := verts[i]
-		var d := Vector2(v.x, v.z).length()
-		var hill := clampf((d - 16.0) / 30.0, 0.0, 1.0)
-		v.y = (sin(v.x * 0.21) * cos(v.z * 0.17) * 0.6 + sin(v.x * 0.07 + v.z * 0.05) * 1.5) * hill + hill * hill * 3.0
-		verts[i] = v
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	var am := ArrayMesh.new()
-	am.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return LowPoly.flat(am)
-
-
-func _static_box(pos: Vector3, size: Vector3) -> void:
-	var body := StaticBody3D.new()
-	var col := CollisionShape3D.new()
-	var shape := BoxShape3D.new()
-	shape.size = size
-	col.shape = shape
-	body.position = pos
-	body.add_child(col)
-	add_child(body)
-
-
-# ---------------- 울타리, 나무, 바위 ----------------
-
-func _build_props() -> void:
-	var wood := LowPoly.mat(Color(0.47, 0.33, 0.21), 0.9)
-	var wood_dark := LowPoly.mat(Color(0.35, 0.24, 0.15), 0.9)
-	var bark := LowPoly.mat(Color(0.33, 0.24, 0.17), 0.95)
-	var leaf := LowPoly.mat(Color(0.25, 0.42, 0.22), 0.9)
-	var leaf2 := LowPoly.mat(Color(0.31, 0.48, 0.24), 0.9)
-	var rock := LowPoly.mat(Color(0.5, 0.5, 0.48), 0.9)
-	var cloth := LowPoly.mat(Color(0.66, 0.16, 0.14), 0.85)
-
-	# 둥근 나무 울타리
-	var fence_r := 13.0
-	var posts := 28
-	for i in posts:
-		var a := TAU * i / posts
-		var p := Vector3(cos(a) * fence_r, 0, sin(a) * fence_r)
-		LowPoly.part(self, LowPoly.cyl(0.09, 0.11, 1.3, 6), wood_dark, p + Vector3(0, 0.65, 0), Vector3.ZERO, 0.01, i)
-		var a2 := TAU * (i + 1) / posts
-		var p2 := Vector3(cos(a2) * fence_r, 0, sin(a2) * fence_r)
-		var mid := (p + p2) * 0.5
-		var length := p.distance_to(p2)
-		for y in [0.55, 1.0]:
-			var rail := LowPoly.part(self, LowPoly.box(Vector3(length + 0.1, 0.1, 0.06)), wood,
-					mid + Vector3(0, y, 0), Vector3.ZERO, 0.008, i * 3 + int(y * 10))
-			rail.look_at_from_position(rail.position, p2 + Vector3(0, y, 0), Vector3.UP)
-			rail.rotate_object_local(Vector3.UP, PI * 0.5)
-	# 울타리 충돌 (둥글게 기둥 대신 벽 상자)
-	for i in posts:
-		var a := TAU * (i + 0.5) / posts
-		var body := StaticBody3D.new()
-		var col := CollisionShape3D.new()
-		var shape := BoxShape3D.new()
-		shape.size = Vector3(0.3, 1.5, TAU * fence_r / posts + 0.2)
-		col.shape = shape
-		body.add_child(col)
-		body.position = Vector3(cos(a) * fence_r, 0.75, sin(a) * fence_r)
-		body.rotation.y = -a
-		add_child(body)
-
-	# 깃발 두 개
-	for side in [-1.0, 1.0]:
-		var base := Vector3(side * 6.5, 0, -8.5)
-		LowPoly.part(self, LowPoly.cyl(0.06, 0.08, 4.2, 6), wood_dark, base + Vector3(0, 2.1, 0))
-		LowPoly.part(self, LowPoly.sphere(0.1, 6, 4), wood, base + Vector3(0, 4.25, 0))
-		var flag := LowPoly.part(self, LowPoly.box(Vector3(0.9, 1.4, 0.03)), cloth, base + Vector3(side * -0.5, 3.4, 0),
-				Vector3(0, 0, 0), 0.04, int(side * 5))
-		flag.rotation_degrees.y = side * 8.0
-
-	# 무기 거치대 (장식)
-	var rack := Node3D.new()
-	rack.position = Vector3(-9.0, 0, 3.0)
-	rack.rotation_degrees.y = 70
-	add_child(rack)
-	LowPoly.part(rack, LowPoly.box(Vector3(2.0, 0.1, 0.1)), wood, Vector3(0, 1.0, 0))
-	LowPoly.part(rack, LowPoly.box(Vector3(2.0, 0.1, 0.1)), wood, Vector3(0, 0.35, 0))
-	for x in [-0.95, 0.95]:
-		LowPoly.part(rack, LowPoly.box(Vector3(0.12, 1.2, 0.3)), wood_dark, Vector3(x, 0.6, 0))
-	var steel := LowPoly.mat(Color(0.7, 0.72, 0.75), 0.35, 0.8)
-	for i in 4:
-		var x := -0.6 + i * 0.4
-		LowPoly.part(rack, LowPoly.box(Vector3(0.05, 1.1, 0.012)), steel, Vector3(x, 0.95, 0.07), Vector3(0, 0, 4 - i * 3))
-		LowPoly.part(rack, LowPoly.box(Vector3(0.2, 0.03, 0.04)), wood_dark, Vector3(x, 0.42, 0.07))
-	_static_box(rack.position + Vector3(0, 0.6, 0), Vector3(1.0, 1.2, 1.0))
-
-	# 나무들 (울타리 밖)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 7
-	for i in 26:
-		var a := rng.randf() * TAU
-		var r := rng.randf_range(18.0, 40.0)
-		var p := Vector3(cos(a) * r, 0, sin(a) * r)
-		var tree := Node3D.new()
-		tree.position = p
-		tree.rotation.y = rng.randf() * TAU
-		var sc := rng.randf_range(0.8, 1.4)
-		tree.scale = Vector3.ONE * sc
-		add_child(tree)
-		LowPoly.part(tree, LowPoly.cyl(0.16, 0.24, 2.0, 6), bark, Vector3(0, 1.0, 0), Vector3.ZERO, 0.03, i)
-		if i % 3 == 0:
-			# 둥근 활엽수
-			LowPoly.part(tree, LowPoly.sphere(1.3, 7, 5), leaf2, Vector3(0, 2.8, 0), Vector3.ZERO, 0.22, i + 100)
-			LowPoly.part(tree, LowPoly.sphere(0.9, 6, 4), leaf, Vector3(0.6, 3.4, 0.3), Vector3.ZERO, 0.15, i + 200)
-		else:
-			# 뾰족한 침엽수
-			for k in 3:
-				var rad := 1.5 - k * 0.38
-				LowPoly.part(tree, LowPoly.cyl(0.0, rad, 1.6, 7), leaf if k % 2 == 0 else leaf2,
-						Vector3(0, 2.0 + k * 0.95, 0), Vector3(0, k * 20, 0), 0.08, i * 10 + k)
-		_static_box(p + Vector3(0, 1.0, 0), Vector3(0.5, 2.0, 0.5) * sc)
-
-	# 바위
-	for i in 18:
-		var a := rng.randf() * TAU
-		var r := rng.randf_range(14.5, 35.0)
-		var p := Vector3(cos(a) * r, 0, sin(a) * r)
-		var s := rng.randf_range(0.4, 1.3)
-		var rk := LowPoly.part(self, LowPoly.sphere(s, 7, 5), rock, p + Vector3(0, s * 0.3, 0),
-				Vector3(rng.randf() * 30, rng.randf() * 180, 0), s * 0.22, i + 500)
-		rk.scale = Vector3(1.0, rng.randf_range(0.55, 0.9), rng.randf_range(0.8, 1.2))

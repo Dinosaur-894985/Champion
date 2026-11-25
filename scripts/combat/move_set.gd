@@ -85,16 +85,45 @@ const REACTIONS := {
 	"parried": {"time": 0.95, "push": 2.0, "kick": 1.2},   # 내 공격이 튕겨났을 때
 }
 
+## 벽 동작 (이동 기술). 캐릭터의 traits 에 이름이 켜져 있어야 쓸 수 있다.
+## 나중에 능력치/빌드로 "벽을 탈 수 있는 캐릭터" 를 정할 때 이 이름을 쓴다.
+##   wall_climb : 벽을 보고 앞으로 누른 채 점프 → 벽을 타고 오른다. 꼭대기에 닿으면 손으로 짚고 올라선다.
+##   wall_run   : 벽 옆을 달리다 점프 → 벽을 따라 옆으로 달린다. 달리는 중 Space 로 벽 차고 뛰기.
+const TRAVERSAL := {
+	"wall_climb": {
+		"speed": 5.2,          # 오르는 빠르기 (m/초)
+		"max_time": 1.35,      # 한 번에 오를 수 있는 시간 → 약 7m
+		"cost": 14.0,          # 초당 기력
+		"mantle_up": 6.0,      # 꼭대기를 짚고 몸을 끌어올리는 빠르기
+		"mantle_fwd": 4.5,     # 꼭대기에서 앞으로 나가는 힘
+		"kick_out": 6.0,       # 오르다 Space: 벽을 차고 뒤로
+		"kick_up": 5.0,
+	},
+	"wall_run": {
+		"speed": 9.0,          # 벽을 따라 달리는 빠르기
+		"max_time": 1.1,
+		"gravity": 0.22,       # 달리는 동안 중력 비율 (천천히 떨어짐)
+		"lift": 2.2,           # 벽에 붙는 순간 살짝 떠오르는 힘
+		"cost": 8.0,           # 붙을 때 기력
+		"min_speed": 4.0,      # 이만큼 빨라야 벽에 붙는다
+		"jump_out": 6.5,       # 벽 차고 뛰기: 벽 반대쪽으로
+		"jump_up": 6.0,
+	},
+}
+
 ## 공격하지 않을 때의 자세
 const FP_POSES := {
 	"rest": [Vector3.ZERO, Vector3.ZERO],
 	"block": [Vector3(8, -20, 78), Vector3(-0.32, 0.26, 0.05)],
 	"stagger": [Vector3(-35, 25, -40), Vector3(0.12, -0.28, 0.12)],
+	"climb": [Vector3(-50, 10, -20), Vector3(0.18, -0.45, 0.15)],
+	"wallrun": [Vector3(-10, 30, 25), Vector3(0.05, -0.12, 0.05)],
 }
 const BODY_POSES := {
 	"guard": [Vector3(55, -15, 0), Vector3(0, 0, 0), 0.0, 0.0],
 	"block": [Vector3(80, 25, 0), Vector3(0, 90, 0), 0.0, -0.05],
 	"stagger": [Vector3(20, -40, 0), Vector3(0, 30, 0), 0.25, -0.3],
+	"climb": [Vector3(170, 0, 0), Vector3(0, 0, 0), 0.0, -0.25],
 }
 
 

@@ -1,7 +1,9 @@
 extends SceneTree
 ## 자동 점검.
 ##  1) 연습장: 앞으로 걸어가 허수아비를 베어 본다.
-##  2) 대결: AI 가 다가와 공격하는지, 막기/튕겨내기가 되는지, AI 를 때릴 수 있는지 본다.
+##  2) 벽 타기: 기둥을 타고 올라가고, 건물 벽을 따라 달려 본다.
+##  3) 추격: 지붕, 기둥 위로 올라간 플레이어를 AI 가 찾아 올라오는지 본다.
+##  4) 대결: AI 가 다가와 공격하는지, 막기/튕겨내기가 되는지, AI 를 때릴 수 있는지 본다.
 ##     (자동 조종: 상대 칼이 빛나면 막고, 빈틈이 보이면 벤다)
 ## 실행: godot --headless --fixed-fps 60 -s res://tests/smoke_test.gd
 ## 사진 남기기: 끝에 -- shots=폴더   /  대결만: -- only=duel
@@ -37,6 +39,10 @@ func _initialize() -> void:
 	seed(seed_value)
 	if _only == "duel":
 		_start_duel()
+	elif _only == "parkour":
+		_start_parkour()
+	elif _only == "chase":
+		_start_chase()
 	else:
 		Game.next_mode = "practice"
 		_game = GAME.instantiate()
@@ -64,6 +70,10 @@ func _process(_delta: float) -> bool:
 	_last_us = now
 	if _phase == "practice":
 		_practice_step()
+	elif _phase == "parkour":
+		_parkour_step()
+	elif _phase == "chase":
+		_chase_step()
 	elif _phase == "duel":
 		_duel_step()
 	return false
@@ -114,7 +124,155 @@ func _practice_step() -> void:
 		if not ok:
 			_fail.append("practice moves")
 		_game.queue_free()
-		_start_duel()
+		_start_parkour()
+
+
+# ---------------- 벽 타기 ----------------
+
+var _max_y := 0.0
+
+
+func _start_parkour() -> void:
+	_phase = "parkour"
+	_frame = 0
+	Game.next_mode = "practice"
+	_game = GAME.instantiate()
+	root.add_child(_game)
+
+
+func _parkour_step() -> void:
+	var player: Player = _game.player
+	if _frame == 3:
+		_game.hud.hide_menu()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		# 북동쪽 기둥 남쪽 면 앞에서, 기둥을 바라본다
+		player.global_position = Vector3(10, 0.1, -5.8)
+		player.rotation.y = 0.0
+		player.head.rotation.x = deg_to_rad(10)
+	if _frame == 6:
+		Input.action_press("move_forward")
+	if _frame == 22:
+		Input.action_press("jump")
+	if _frame == 24:
+		Input.action_release("jump")
+	if player.sm.state == "climb":
+		_shot_once("k1_climb")
+	_max_y = maxf(_max_y, player.global_position.y)
+	if _frame < 170 and player.is_on_floor() and player.global_position.y > 5.5:
+		Input.action_release("move_forward")   # 꼭대기에 올라섰으면 멈춘다
+	if _frame == 170:
+		Input.action_release("move_forward")
+		player.head.rotation.x = deg_to_rad(-15)
+		player.rotation.y = deg_to_rad(150)
+		_shot("k2_pillar_top")
+	if _frame == 180:
+		var ok: bool = player.global_position.y > 5.5 and player.sm.counts.get("climb", 0) >= 1
+		print("CLIMB max_y=%.2f now_y=%.2f climbs=%d  => %s" % [_max_y, player.global_position.y,
+				player.sm.counts.get("climb", 0), "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("wall climb")
+		# 서쪽 건물 동쪽 벽 옆에서 벽을 따라 달린다
+		player.global_position = Vector3(-12.9, 0.1, 4.5)
+		player.velocity = Vector3.ZERO
+		player.rotation.y = 0.0
+		player.head.rotation.x = 0.0
+		_max_y = 0.0
+	if _frame == 182:
+		Input.action_press("move_forward")
+		Input.action_press("sprint")
+	if _frame == 194:
+		Input.action_press("move_left")
+		Input.action_press("jump")
+	if _frame == 196:
+		Input.action_release("jump")
+	if player.sm.state == "wallrun" and player.sm.time > 0.25:
+		_shot_once("k3_wallrun")
+	if _frame == 260:
+		for a in ["move_forward", "sprint", "move_left"]:
+			Input.action_release(a)
+		var ok: bool = player.sm.counts.get("wallrun", 0) >= 1
+		print("WALLRUN runs=%d  => %s" % [player.sm.counts.get("wallrun", 0), "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("wall run")
+		_game.queue_free()
+		if _only == "parkour":
+			_report_and_quit()
+		else:
+			_start_chase()
+
+
+# ---------------- 추격 ----------------
+
+## [플레이어 자리, AI 가 이 높이 위로 올라오면 성공, AI 가 벽을 탈 수 있나, 이름]
+const CHASE_GOALS := [
+	[Vector3(-17, 4.3, -1), 3.9, true, "west_roof"],
+	[Vector3(-10, 6.1, -10), 5.7, true, "pillar_top"],
+	[Vector3(18, 3.1, 3.5), 2.95, false, "east_roof_by_ramp"],
+]
+var _goal := 0
+var _goal_start := 0
+
+
+func _start_chase() -> void:
+	_phase = "chase"
+	_frame = 0
+	_goal = 0
+	Game.next_mode = "duel"
+	_game = GAME.instantiate()
+	root.add_child(_game)
+
+
+func _chase_step() -> void:
+	var player: Player = _game.player
+	var ai: Duelist = _game.duelist
+	if _frame == 3:
+		_game.hud.hide_menu()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		player.hp = 100000
+	if not ai.active:
+		return
+	if _goal_start == 0:
+		_goal_start = _frame
+		_set_goal(player, ai)
+	var g: Array = CHASE_GOALS[_goal]
+	var to_ai := ai.global_position - player.global_position
+	player.rotation.y = atan2(-to_ai.x, -to_ai.z)
+	if ai.state == "climb":
+		_shot_once("c_climb_" + g[3])
+	var took := _frame - _goal_start
+	if ai.global_position.y > g[1] or took > 1200:
+		var ok: bool = ai.global_position.y > g[1]
+		print("CHASE %s frames=%d ai_y=%.2f climbs=%d unstuck=%d  => %s" % [g[3], took, ai.global_position.y,
+				ai.stats.get("climb", 0), ai.stats.get("unstuck", 0), "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("AI chase " + g[3])
+		_shot("c_reached_" + g[3])
+		_goal += 1
+		if _goal >= CHASE_GOALS.size():
+			_game.queue_free()
+			if _only == "chase":
+				_report_and_quit()
+			else:
+				_start_duel()
+			return
+		_goal_start = _frame
+		_set_goal(player, ai)
+
+
+func _set_goal(player: Player, ai: Duelist) -> void:
+	var g: Array = CHASE_GOALS[_goal]
+	player.global_position = g[0]
+	player.velocity = Vector3.ZERO
+	ai.traits["wall_climb"] = g[2]
+	ai.global_position = Vector3(0, 0.1, 0)
+	ai.velocity = Vector3.ZERO
+	ai._repath_t = 0.0
+
+
+func _report_and_quit() -> void:
+	print("SMOKE => %s %s" % ["OK" if _fail.is_empty() else "FAIL", _fail])
+	_phase = "done"
+	quit(0 if _fail.is_empty() else 1)
 
 
 func _duel_step() -> void:
@@ -248,9 +406,7 @@ func _finish_duel(player: Player, ai: Duelist) -> void:
 	_spikes.sort_custom(func(a, b): return a[0] > b[0])
 	var med: float = _spikes[_spikes.size() / 2][0] if _spikes.size() > 0 else 0.0
 	print("FRAMES median=%.1fms worst=%s" % [med, _spikes.slice(0, 8)])
-	print("SMOKE => %s %s" % ["OK" if _fail.is_empty() else "FAIL", _fail])
-	_phase = "done"
-	quit(0 if _fail.is_empty() else 1)
+	_report_and_quit()
 
 
 var _shot_done := {}

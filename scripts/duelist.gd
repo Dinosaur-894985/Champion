@@ -33,6 +33,9 @@ var counter_chance := 0.65      # 막아낸 뒤 바로 반격
 var combo_chance := 0.55        # 연속 베기를 이어갈 확률
 var charge_chance := 0.18       # 거리가 벌어졌을 때 차지 베기
 var stats := {}   # 점검용 기록: 받은 공격 결과, 한 행동 횟수
+## 쓸 수 있는 이동 기술 (플레이어와 같은 이름). 벽을 못 타면 계단과 경사로로만 올라간다.
+var traits := {"wall_climb": true}
+var arena: Arena                # 길찾기 (없으면 곧장 다가간다)
 
 var hp := MAX_HP
 var active := false
@@ -62,6 +65,20 @@ var _dist := 99.0
 var _dodged_by_target := 0      # 플레이어에게 몇 번 피해졌나 → 많을수록 휘두르는 타이밍을 흔든다
 var _windup_len := 0.5
 var _dir := Vector3.FORWARD
+var _dy := 0.0                  # 상대가 나보다 얼마나 높이 있나
+
+# 길찾기
+var _direct := true             # 상대에게 곧장 갈 수 있나 (같은 층이고 막힌 게 없음)
+var _direct_t := 0.0
+var _path: Array = []
+var _path_i := 0
+var _repath_t := 0.0
+var _face := Vector3.ZERO       # 길을 따라갈 때 바라볼 방향 (ZERO 면 상대를 본다)
+var _climb_top := 0.0
+var _climb_dir := Vector3.ZERO
+var _stuck_t := 0.0
+var _stuck_pos := Vector3.ZERO
+var _ray := PhysicsRayQueryParameters3D.new()
 
 var rig: BodyRig
 var _audio: AudioStreamPlayer3D
@@ -102,7 +119,9 @@ func _ready() -> void:
 		.add("block", _block_enter, _block_update) \
 		.add("dash", _dash_enter, _dash_update) \
 		.add("stagger", _stagger_enter, _stagger_update) \
+		.add("climb", _climb_enter, _climb_update) \
 		.add("dead")
+	_ray.collision_mask = 1
 	sm.changed.connect(func(_a, b): stats[b] = stats.get(b, 0) + 1)
 	sm.go("idle")
 
@@ -121,7 +140,7 @@ var _turn_speed := TURN_SPEED
 
 
 func _physics_process(delta: float) -> void:
-	if not is_on_floor():
+	if not is_on_floor() and state != "climb":
 		velocity.y -= _gravity * delta
 	_alert = maxf(_alert - delta, 0.0)
 	_iframes = maxf(_iframes - delta, 0.0)
@@ -129,6 +148,7 @@ func _physics_process(delta: float) -> void:
 	if _hits_reset <= 0.0:
 		_hits_in_row = 0
 	_move = Vector3.ZERO
+	_face = Vector3.ZERO
 	_turn_speed = TURN_SPEED
 
 	if active and not dead and target and not target.dead:
@@ -136,9 +156,15 @@ func _physics_process(delta: float) -> void:
 		to_t.y = 0
 		_dist = to_t.length()
 		_dir = to_t / maxf(_dist, 0.001)
+		_dy = target.global_position.y - global_position.y
+		_direct_t -= delta
+		if _direct_t <= 0.0:
+			_direct_t = 0.2
+			_direct = _check_direct()
 		sm.tick(delta)
-		# 몸을 상대 쪽으로 돌린다
-		var desired := atan2(-_dir.x, -_dir.z)
+		# 몸을 상대 쪽으로 돌린다 (길을 따라갈 때는 가는 쪽으로)
+		var look := _face if _face != Vector3.ZERO else _dir
+		var desired := atan2(-look.x, -look.z)
 		rotation.y = rotate_toward(rotation.y, desired, _turn_speed * delta)
 
 	_push = _push.lerp(Vector3.ZERO, clampf(delta * 6.0, 0, 1))
@@ -156,6 +182,10 @@ func _process(delta: float) -> void:
 
 func _think() -> void:
 	_think_t = randf_range(0.18, 0.35)
+	if not _direct:
+		# 상대가 다른 층(지붕, 기둥 위)에 있으면 길을 찾아 올라간다
+		sm.go("approach")
+		return
 	var r := randf()
 	# 거리가 좀 벌어졌으면 가끔 차지 베기로 돌진
 	if _dist > 2.6 and _dist < 4.6 and randf() < charge_chance * (1.0 if r < aggression else 0.3):
@@ -246,6 +276,10 @@ func _neutral_update(delta: float) -> void:
 		_think()
 		if state not in ["approach", "circle"]:
 			return
+	if not _direct:
+		_move = _nav_move(delta)
+		return
+	_path.clear()
 	var side := Vector3(-_dir.z, 0, _dir.x)
 	if state == "approach":
 		_move = _dir * MOVE_SPEED if _dist > 2.0 else Vector3.ZERO
@@ -391,10 +425,109 @@ func _stagger(t: float, big: bool = true) -> void:
 	sm.go("stagger", {"time": t, "big": big})
 
 
+# ---------------- 길찾기와 벽 오르기 ----------------
+
+## 상대에게 곧장 걸어갈 수 있나: 같은 층(높이 차 작음)이고, 같은 구역이고, 사이에 벽이 없으면.
+func _check_direct() -> bool:
+	if arena == null:
+		return true
+	if absf(_dy) > 1.0:
+		return false
+	if arena.area_of(global_position) != arena.area_of(target.global_position):
+		return false
+	_ray.from = global_position + Vector3.UP * 0.6
+	_ray.to = target.global_position + Vector3.UP * 0.6
+	_ray.exclude = [get_rid(), target.get_rid()]
+	return get_world_3d().direct_space_state.intersect_ray(_ray).is_empty()
+
+
+## 길목 점을 따라 움직일 방향. 벽 오르기/점프가 필요한 곳에서는 그 동작을 시작한다.
+func _nav_move(delta: float) -> Vector3:
+	_repath_t -= delta
+	if _repath_t <= 0.0 or _path_i >= _path.size():
+		_repath_t = 0.6
+		_path = arena.find_path(global_position, target.global_position, traits.get("wall_climb", false))
+		_path_i = 1 if _path.size() > 1 else 0
+	if _path.is_empty():
+		# 갈 길이 없다 (벽을 못 타는데 상대가 기둥 위에 있다 등): 아래에서 기다리며 맴돈다
+		return Vector3(-_dir.z, 0, _dir.x) * _strafe_dir * STRAFE_SPEED * 0.5
+	var wp: Dictionary = _path[mini(_path_i, _path.size() - 1)]
+	var p: Vector3 = wp.pos
+	var to := Vector3(p.x - global_position.x, 0, p.z - global_position.z)
+	var hd := to.length()
+	var dy := p.y - global_position.y
+	# 도착하면 다음 점으로
+	if hd < 0.8 and dy < 0.6 and dy > -1.2:
+		_path_i += 1
+		if _path_i >= _path.size():
+			_repath_t = 0.0
+			return _dir * MOVE_SPEED
+		wp = _path[_path_i]
+		p = wp.pos
+		to = Vector3(p.x - global_position.x, 0, p.z - global_position.z)
+		hd = to.length()
+		dy = p.y - global_position.y
+	var dir := to / maxf(hd, 0.001)
+	_face = dir
+	_check_stuck(delta)
+	match wp.kind:
+		"climb":
+			if dy > 0.6 and hd < 1.9 and is_on_floor():
+				sm.go("climb", {"top": p.y, "dir": dir})
+				return Vector3.ZERO
+		"jump":
+			if dy > 0.4 and hd < 2.2 and is_on_floor():
+				velocity.y = 6.3
+	return dir * MOVE_SPEED * (1.15 if not _direct else 1.0)
+
+
+## 오래 제자리면 (모서리에 걸림) 한 번 뛰고 길을 다시 찾는다
+func _check_stuck(delta: float) -> void:
+	_stuck_t += delta
+	if _stuck_t < 1.2:
+		return
+	if global_position.distance_to(_stuck_pos) < 0.4 and is_on_floor():
+		velocity.y = 5.5
+		_repath_t = 0.0
+		stats["unstuck"] = stats.get("unstuck", 0) + 1
+	_stuck_t = 0.0
+	_stuck_pos = global_position
+
+
+func _climb_enter(d: Dictionary) -> void:
+	_climb_top = d.top
+	_climb_dir = d.dir
+	rig.set_pose(MoveSet.BODY_POSES.climb, 10.0)
+	rig.glow(rig.blade_mat.emission, 0.0)
+	rig.tremble = 0.0
+
+
+func _climb_update(_delta: float) -> void:
+	var t: Dictionary = MoveSet.TRAVERSAL.wall_climb
+	_face = _climb_dir
+	_turn_speed = 12.0
+	_move = _climb_dir * 2.0
+	velocity.y = float(t.speed) * 0.9
+	if global_position.y >= _climb_top + 0.05:
+		# 꼭대기: 짚고 올라선다
+		velocity.y = 3.0
+		_push = _climb_dir * 4.0
+		_path_i += 1
+		_back_to_neutral()
+		sm.go("approach")
+		return
+	# 벽에 안 붙었거나 너무 오래 걸리면 포기 (떨어진다)
+	var near_top := global_position.y > _climb_top - 0.7
+	if (_state_t > 0.35 and not is_on_wall() and not near_top) or _state_t > 3.0:
+		velocity.y = 0.0
+		_repath_t = 0.0
+		_back_to_neutral()
+
+
 # ---------------- 공격 맞히기 ----------------
 
 func _try_hit(data: Dictionary) -> void:
-	if _dist > float(data.reach) + 0.15:
+	if _dist > float(data.reach) + 0.15 or absf(_dy) > 1.4:
 		return
 	var facing := -global_transform.basis.z
 	facing.y = 0

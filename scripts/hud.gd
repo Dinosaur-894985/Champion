@@ -132,9 +132,10 @@ func _ready() -> void:
 
 	# 조작법 (왼쪽 위)
 	_help = Label.new()
-	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\n오른쪽 클릭  막기 (맞기 직전에 누르면 튕겨내기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
+	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n벽을 보고 W + Space  벽 타고 오르기 (위에서 W 누른 채 올라섬)\n벽 옆을 달리다 Space  벽 달리기 (달리는 중 Space: 벽 차고 뛰기)\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\n오른쪽 클릭  막기 (맞기 직전에 누르면 튕겨내기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
 	_help.add_theme_font_size_override("font_size", 15)
-	_help.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+	_help.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
+	_help.add_theme_constant_override("outline_size", 5)   # 밝은 경기장에서도 읽히게
 	_help.position = Vector2(24, 20)
 	_root.add_child(_help)
 
