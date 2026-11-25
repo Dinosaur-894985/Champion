@@ -164,8 +164,8 @@ var _blade_tip: Node3D
 var _blade_mat: StandardMaterial3D
 var _weapon_tween: Tween
 var _trail: MeshInstance3D
-var _audio: AudioStreamPlayer
-var _sounds := {}
+var _step_dist := 0.0          # 발소리: 지난 발소리 뒤로 걸은 거리
+var _hit_weapon := ""        # 나를 때린 상대의 무기 (맞는 소리를 고른다)
 var _hit_query := PhysicsShapeQueryParameters3D.new()
 var _hit_box: BoxShape3D
 var _left_root: Node3D        # 쌍단검의 왼손 단검
@@ -211,20 +211,6 @@ func _ready() -> void:
 	_hit_query.collision_mask = 2
 	_hit_query.exclude = [get_rid()]
 
-	_sounds = {
-		"light": Sfx.whoosh(0.2, 1.0),
-		"heavy": Sfx.whoosh(0.32, 0.7),
-		"dash": Sfx.whoosh(0.16, 1.4),
-		"clang": Sfx.clang(0.45, 1.0),
-		"parry": Sfx.clang(0.7, 1.25),
-		"hurt": Sfx.hurt(),
-		"charged": Sfx.clang(0.35, 1.6),
-	}
-	_audio = AudioStreamPlayer.new()
-	_audio.volume_db = -4.0
-	_audio.max_polyphony = 4
-	add_child(_audio)
-
 	# 행동 상태 등록 — 새 행동은 여기 한 줄과 함수 몇 개로 늘릴 수 있다
 	sm.add("free") \
 		.add("block", _block_enter, _block_update) \
@@ -246,11 +232,13 @@ func _ready() -> void:
 	_build_rope()
 
 
-func _play(snd: String, pitch: float = 1.0, volume: float = -4.0) -> void:
-	_audio.stream = _sounds[snd]
-	_audio.pitch_scale = pitch * randf_range(0.94, 1.06)
-	_audio.volume_db = volume
-	_audio.play()
+## 효과음 (scripts/audio/audio.gd). 1인칭이라 내 소리는 귀 바로 앞에서 난다.
+func _play(snd: String, pitch: float = 1.0, volume: float = 0.0) -> void:
+	Audio.play(snd, null, volume, pitch)
+
+
+func _wsnd(kind: String) -> String:
+	return Audio.weapon_sound(kind, weapon)
 
 
 func _build_sword() -> void:
@@ -387,7 +375,7 @@ func _physics_process(delta: float) -> void:
 		# 이중 점프: 공중에서 한 번 더
 		if _coyote <= 0.0 and _jump_released and skills.try_double_jump(JUMP_VELOCITY * 0.95):
 			_jump_buffer = 0.0
-			_play("dash", 1.35, -8.0)
+			_play("double_jump")
 			Fx.sparks(get_parent(), global_position, Vector3.DOWN, 10, Color(0.85, 0.9, 1.0))
 	if _jump_buffer > 0.0 and _coyote > 0.0 and stamina >= JUMP_COST * 0.5:
 		velocity.y = JUMP_VELOCITY
@@ -395,6 +383,7 @@ func _physics_process(delta: float) -> void:
 		_coyote = 0.0
 		_jump_released = false
 		_use_stamina(JUMP_COST)
+		_play("jump")
 
 	var input := Vector2.ZERO
 	if controls_enabled and not dead:
@@ -462,6 +451,7 @@ func _after_move(was_on_floor: bool, input: Vector2) -> void:
 	if _wall_contact and _thrown_t > 0.0 and _pre_speed >= float(MoveSet.THROW.wall_slam_speed):
 		_wall_slam()
 	var on_floor := is_on_floor()
+	_footsteps(on_floor, was_on_floor)
 	if on_floor:
 		if not was_on_floor and _fall_speed < -7.0:
 			# 높은 곳에서 떨어지면 착지할 때 화면이 살짝 눌린다
@@ -495,6 +485,29 @@ func _after_move(was_on_floor: bool, input: Vector2) -> void:
 			sm.go("wallrun", {"n": n})
 
 
+## 발소리와 착지 소리. 빨리 달릴수록 발소리 간격이 짧아진다. 벽 달리기 중에는 벽을 밟는다.
+func _footsteps(on_floor: bool, was_on_floor: bool) -> void:
+	if on_floor and not was_on_floor:
+		if _fall_speed < -11.0:
+			_play("land_hard")
+		elif _fall_speed < -3.0:
+			_play("land", 1.0, -2.0 if _fall_speed > -6.0 else 0.0)
+		_step_dist = 0.0
+		return
+	var walking := on_floor and sm.state in ["free", "block", "attack", "charge"]
+	if not walking and sm.state != "wallrun":
+		return
+	var hspeed := Vector2(velocity.x, velocity.z).length()
+	if hspeed < 1.0:
+		_step_dist = minf(_step_dist, 1.2)
+		return
+	_step_dist += hspeed * get_physics_process_delta_time()
+	var stride := 2.1 if hspeed > 6.5 else 1.6
+	if _step_dist >= stride:
+		_step_dist = 0.0
+		Audio.step(null, -3.0 if hspeed < 4.0 else 0.0)
+
+
 ## 몸 양옆 가까이에 벽이 있으면 그 벽의 방향, 없으면 ZERO
 func _side_wall() -> Vector3:
 	var right := transform.basis.x
@@ -519,7 +532,7 @@ func _climb_enter(_d: Dictionary) -> void:
 	_climb_used = true
 	_ledge_y = -INF
 	_pose_to(MoveSet.FP_POSES.climb, 0.12)
-	_play("dash", 0.8, -12.0)
+	_play("climb")
 
 
 func _climb_update(delta: float) -> void:
@@ -548,7 +561,7 @@ func _climb_update(delta: float) -> void:
 	if _can_act() and Input.is_action_just_pressed("jump"):
 		# 벽 차고 뒤로 뛰기
 		velocity = _wall_n * float(t.kick_out) + Vector3.UP * float(t.kick_up)
-		_play("dash", 1.1, -8.0)
+		_play("wall_kick")
 		sm.go("free")
 		return
 	var holding := _can_act() and Input.is_action_pressed("move_forward")
@@ -573,7 +586,8 @@ func _wallrun_enter(d: Dictionary) -> void:
 	velocity.y = maxf(velocity.y, float(t.lift))
 	_use_stamina(float(t.cost))
 	_pose_to(MoveSet.FP_POSES.wallrun, 0.12)
-	_play("dash", 0.9, -10.0)
+	_play("wall_kick", 1.1, -3.0)
+	_step_dist = 0.0
 
 
 func _wallrun_update(delta: float) -> void:
@@ -585,7 +599,7 @@ func _wallrun_update(delta: float) -> void:
 	if _can_act() and Input.is_action_just_pressed("jump"):
 		# 벽 차고 뛰기: 다른 벽으로 이어 달릴 수 있다
 		velocity = _run_n * float(t.jump_out) + _run_t * spd * 0.75 + Vector3.UP * float(t.jump_up)
-		_play("dash", 1.2, -8.0)
+		_play("wall_kick")
 		sm.go("free")
 		return
 	var holding := _can_act() and Input.is_action_pressed("move_forward")
@@ -707,7 +721,7 @@ func set_guard(dir: String) -> void:
 		_guard_t = 0.0
 		_pose_to(MoveSet.FP_POSES[MoveSet.block_pose(guard_dir)], 0.06)
 		if changed_dir:
-			_play("dash", 1.8, -16.0)
+			_play("guard_shift")
 	if changed_dir:
 		guard_changed.emit(dir)
 
@@ -779,7 +793,7 @@ func _dash_enter(d: Dictionary) -> void:
 	_use_stamina(DASH_COST)
 	_pose_to(MoveSet.FP_POSES.rest, 0.12)
 	camera.fov += 8.0
-	_play("dash", 1.0 + _dash_local.x * 0.08, -8.0)
+	_play("dash", 1.0 + _dash_local.x * 0.04)
 
 
 func _dash_update(_delta: float) -> void:
@@ -813,6 +827,7 @@ func _open_counter() -> void:
 	_counter_t = COUNTER_WINDOW
 	counter_window.emit(true)
 	combat_event.emit("아슬한 회피! 지금 반격!", Color(0.5, 0.9, 1.0))
+	_play("perfect_dodge")
 	_slow_motion(0.3, 0.22)
 
 
@@ -970,7 +985,10 @@ func _atk_mult() -> float:
 func _enter_active(data: Dictionary) -> void:
 	_attack_phase = "active"
 	_attack_timer = data.active
-	_play("heavy" if _move in ["heavy", "charge", "slash3"] else ("dash" if _move == "grab" else "light"), 1.0, -6.0)
+	if _move == "grab":
+		_play("grab_whoosh")
+	else:
+		_play(_wsnd("swing_heavy" if _move in ["heavy", "charge", "slash3", "plunge"] else "swing"))
 	var fwd := -transform.basis.z
 	velocity += fwd * float(data.lunge)
 	_kill_weapon_tween()
@@ -1076,7 +1094,8 @@ func _grab_result(result: String, target: Node3D) -> void:
 	to.y = 0
 	match result:
 		"thrown":
-			_play("heavy", 0.7, -2.0)
+			_play("grab")
+			_play("throw")
 			combat_event.emit("잡아 던지기!", Color(0.95, 0.6, 1.0))
 			_shake = 0.6
 			_kick.x += deg_to_rad(4.0)
@@ -1088,7 +1107,7 @@ func _grab_result(result: String, target: Node3D) -> void:
 		"clash":
 			# 서로 잡으려다 맞잡았다: 둘 다 튕겨 난다
 			combat_event.emit("맞잡기!", Color(0.9, 0.9, 0.9))
-			_play("clang", 0.7)
+			_play("grab_clash")
 			_react("recoil", to)
 		"blocked":
 			combat_event.emit("잡히지 않는다", Color(0.85, 0.85, 0.85))
@@ -1124,6 +1143,7 @@ func _take_grab(info: Dictionary, attacker: Node3D) -> String:
 		return "beaten"
 	_take_damage(int(info.damage), to_attacker)
 	combat_event.emit("잡혔다!", Color(1.0, 0.45, 0.8))
+	_play("grab")
 	_react("thrown", Vector3.ZERO)
 	_kick = Vector3(deg_to_rad(-10.0), 0, deg_to_rad(8.0))
 	apply_throw(info.throw)
@@ -1144,6 +1164,7 @@ func _wall_slam() -> void:
 	var dmg := int(MoveSet.THROW.wall_slam_damage)
 	_take_damage(dmg, -_wall_n)
 	combat_event.emit("벽꽝! -%d" % dmg, Color(1.0, 0.5, 0.3))
+	_play("wall_slam")
 	_shake = 0.9
 	_kick += Vector3(deg_to_rad(8.0), 0, 0)
 	Fx.impact(get_parent(), global_position + Vector3.UP * 1.2 - _wall_n * 0.3, _wall_n, Color(0.9, 0.85, 0.75), 18)
@@ -1167,7 +1188,7 @@ func _charge_update(_delta: float) -> void:
 	_blade_mat.emission_energy_multiplier = _charge_level * _charge_level * 2.5
 	if _charge_level >= 1.0 and not _charge_full:
 		_charge_full = true
-		_play("charged", 1.0, -3.0)
+		_play("charge_ready")
 		combat_event.emit("힘 최대!", Color(1.0, 0.8, 0.35))
 		_shake = 0.25
 	if sm.time >= CHARGE_AUTO_RELEASE or (_press_t < 0.0 and not Input.is_action_pressed("attack")):
@@ -1239,6 +1260,7 @@ func receive_attack(info: Dictionary, attacker: Node3D) -> String:
 		attack_received.emit(hung)
 		return hung
 	var result := _resolve_attack(info, attacker)
+	_hit_weapon = ""
 	_after_received(result, info, attacker)
 	attack_received.emit(result)
 	return result
@@ -1247,6 +1269,7 @@ func receive_attack(info: Dictionary, attacker: Node3D) -> String:
 func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 	if dead:
 		return "none"
+	_hit_weapon = str(attacker.get("weapon")) if attacker.get("weapon") != null else "sword"
 	var to_attacker := attacker.global_position - global_position
 	to_attacker.y = 0
 	if _iframes > 0.0:
@@ -1260,7 +1283,7 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 	var damage: int = info.damage
 	if sm.state == "iron":
 		# 철벽: 어느 방향이든, 어떤 공격이든 막는다. 기력도 줄지 않는다.
-		_play("clang", 0.8)
+		_play(_wsnd("clash"), 0.85)
 		Fx.sparks(get_parent(), _blade_tip.global_position, to_attacker.normalized(), 24, Color(1.0, 0.85, 0.4))
 		combat_event.emit("철벽!", Color(1.0, 0.85, 0.4))
 		_shake = 0.3
@@ -1274,14 +1297,14 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 	if blocking and in_front and info.guard != "unblockable":
 		var contact := _blade_tip.global_position
 		if _guard_t <= build.parry_window() * Weapons.stat(weapon, "parry"):
-			_play("parry", 1.0, -1.0)
+			_play("parry")
 			Fx.sparks(get_parent(), contact, to_attacker.normalized(), 40, Color(0.7, 0.9, 1.0))
 			combat_event.emit("튕겨내기!", Color(0.55, 0.85, 1.0))
 			_shake = 0.5
 			_slow_motion(0.25, 0.3)
 			add_gauge(Weapons.GAUGE.parry)
 			return "parried"
-		_play("clang")
+		_play(_wsnd("clash"))
 		Fx.sparks(get_parent(), contact, to_attacker.normalized())
 		_shake = 0.35
 		if info.guard == "break":
@@ -1293,6 +1316,7 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 			# 기력이 바닥나거나 막기를 깨는 공격이면 막기가 깨진다
 			_use_stamina(0.0)
 			combat_event.emit("가드 깨짐!", Color(1.0, 0.5, 0.3))
+			_play("guard_break")
 			_take_damage(damage / 2, to_attacker)
 			_react("guard_break", to_attacker)
 			return "guard_broken"
@@ -1308,13 +1332,21 @@ func _take_damage(amount: int, from_dir: Vector3) -> void:
 	add_gauge(amount * Weapons.GAUGE.taken)
 	hp_changed.emit(hp, max_hp)
 	took_damage.emit(amount)
-	_play("hurt", 1.0, -2.0)
+	_play("hurt")
+	if amount > 0 and _hit_weapon != "":
+		_play(_wsnd_of("hit", _hit_weapon), 1.0, -3.0)
+	_hit_weapon = ""
 	_shake = 0.7
 	if hp <= 0:
 		_die()
 
 
+func _wsnd_of(kind: String, w: String) -> String:
+	return Audio.weapon_sound(kind, w)
+
+
 func _die() -> void:
+	Audio.loop_stop("zip_player")
 	dead = true
 	sm.go("free")
 	_kill_weapon_tween()
@@ -1357,15 +1389,13 @@ func _check_hits(data: Dictionary) -> void:
 		var contact := _blade_tip.global_position
 		match result:
 			"blocked":
-				# 상대가 막았다: 칼이 튕겨 나오고 잠깐 굳는다
-				_play("clang")
+				# 상대가 막았다: 칼이 튕겨 나오고 잠깐 굳는다 (부딪히는 소리는 막은 쪽이 낸다)
 				Fx.sparks(get_parent(), contact, -hit_dir)
 				combat_event.emit("막힘", Color(0.85, 0.85, 0.85))
 				_shake = 0.3
 				_react("recoil", Vector3.ZERO)
 				return
 			"parried":
-				_play("parry", 0.9, -1.0)
 				Fx.sparks(get_parent(), contact, -hit_dir, 40, Color(1.0, 0.55, 0.3))
 				combat_event.emit("튕겨냄 당함!", Color(1.0, 0.45, 0.35))
 				_shake = 0.5
@@ -1478,7 +1508,7 @@ func use_skill(skill: String) -> bool:
 		"haste":
 			skills.use(skill)
 			combat_event.emit("질풍!", Color(0.55, 1.0, 0.7))
-			_play("dash", 0.7, -4.0)
+			_play("haste")
 			camera.fov += 6.0
 		"iron_guard":
 			skills.use(skill)
@@ -1530,7 +1560,7 @@ func blink_toward(dir: Vector3) -> void:
 	Fx.sparks(get_parent(), global_position + Vector3.UP * 1.0, dir, 18, c)
 	camera.fov += 14.0
 	_roll = -signf(input_side(dir)) * deg_to_rad(6.0)
-	_play("dash", 1.6, -5.0)
+	_play("blink")
 
 
 ## dir 가 내 오른쪽이면 +, 왼쪽이면 -
@@ -1577,7 +1607,7 @@ func _grapple_enter(d: Dictionary) -> void:
 	_grap_body = d.body
 	_rope.visible = true
 	_pose_to(MoveSet.FP_POSES.wallrun, 0.1)
-	_play("dash", 0.6, -4.0)
+	_play("grapple")
 	_update_rope()
 
 
@@ -1624,7 +1654,7 @@ func _iron_enter(_d: Dictionary) -> void:
 	_blade_mat.emission = Color(1.0, 0.85, 0.4)
 	_blade_mat.emission_energy_multiplier = 1.6
 	combat_event.emit("철벽!", Color(1.0, 0.85, 0.4))
-	_play("charged", 0.8, -4.0)
+	_play("iron")
 
 
 func _iron_update(_delta: float) -> void:
@@ -1690,7 +1720,7 @@ func _plunge_enter(_d: Dictionary) -> void:
 	fwd.y = 0
 	velocity = fwd.normalized() * 2.5 + Vector3.UP * 2.0
 	_pose_to(data.fp.windup, float(data.windup))
-	_play("heavy", 0.75, -4.0)
+	_play("jump")
 	attack_started.emit("plunge")
 
 
@@ -1704,7 +1734,7 @@ func _plunge_update(delta: float) -> void:
 		return
 	if sm.time - delta < float(data.windup):
 		_pose_to(data.fp.strike, 0.12, Tween.TRANS_CUBIC, Tween.EASE_IN)
-		_play("dash", 0.7, -4.0)
+		_play("plunge_dive")
 	# 내리꽂으며 보는 쪽으로 조금 움직일 수 있다
 	var fwd := -transform.basis.z
 	fwd.y = 0
@@ -1727,7 +1757,7 @@ func _plunge_impact() -> void:
 	velocity = Vector3.ZERO
 	_shake = 0.6 + k * 0.5
 	_kick.x -= deg_to_rad(5.0 + k * 4.0)
-	_play("clang", 0.55, -1.0)
+	_play("plunge_impact")
 	var feet := global_position + Vector3.UP * 0.1
 	Fx.impact(get_parent(), feet, Vector3.UP, Color(0.82, 0.74, 0.6), 26)
 	Fx.sparks(get_parent(), feet, Vector3.UP, 20, Color(1.0, 0.8, 0.45))
@@ -1793,7 +1823,7 @@ func _hang_enter(d: Dictionary) -> void:
 	velocity = Vector3.ZERO
 	vkit.reset_fall()
 	_pose_to(MoveSet.FP_POSES.hang, 0.1)
-	_play("dash", 0.7, -10.0)
+	_play("hang")
 	combat_event.emit("매달림  Space 올라서기 · 클릭 뛰어올라 베기", Color(0.95, 0.92, 0.75))
 
 
@@ -1860,7 +1890,8 @@ func _zip_enter(d: Dictionary) -> void:
 	_zip_stall = 0.0
 	_zip.rider_count += 1
 	_pose_to(MoveSet.FP_POSES.zip, 0.12)
-	_play("dash", 0.6, -6.0)
+	_play("zip_attach")
+	Audio.loop_start("zip_player", "zip_loop", self)
 
 
 func _zip_update(delta: float) -> void:
@@ -1896,6 +1927,8 @@ func _zip_release(v: Vector3) -> void:
 
 
 func _zip_exit() -> void:
+	Audio.loop_stop("zip_player")
+	_play("zip_release")
 	if is_instance_valid(_zip):
 		_zip.rider_count -= 1
 	_pose_to(MoveSet.FP_POSES.rest, 0.15)
@@ -1947,6 +1980,7 @@ func _fall_into_void() -> void:
 	vkit.reset_fall()
 	_iframes = 1.0
 	_shake = 0.6
+	_play("fall_void")
 	# 연습장에서는 다시 서기만 한다. 대결 중이면 큰 피해.
 	if arena and arena.director.running and not dead:
 		var dmg := int(ceilf(max_hp * VerticalKit.VOID_DAMAGE))
@@ -1957,7 +1991,7 @@ func _fall_into_void() -> void:
 
 
 func on_pickup(kind: String) -> void:
-	_play("charged", 1.3, -4.0)
+	_play("pickup_get")
 	if kind == "power":
 		_blade_mat.emission = Color(1.0, 0.55, 0.2)
 
@@ -1985,6 +2019,7 @@ func add_gauge(amount: float) -> void:
 		gauge_changed.emit(gauge, Weapons.GAUGE_MAX)
 		if before < Weapons.GAUGE_MAX and gauge >= Weapons.GAUGE_MAX:
 			combat_event.emit("필살기 준비!  V", Color(1.0, 0.85, 0.3))
+			_play("special_ready")
 
 
 func special_ready() -> bool:
@@ -2021,7 +2056,7 @@ func _special_enter(_d: Dictionary) -> void:
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
 	_tween_pose(_weapon_tween, _sp.fp.windup, float(_sp.windup), Tween.TRANS_BACK)
-	_play("charged", 0.8, -3.0)
+	_play("special_windup")
 	combat_event.emit(str(_sp.name) + "!", Color(1.0, 0.82, 0.3))
 	_shake = 0.25
 	if _sp.effect == "quake":
@@ -2068,7 +2103,7 @@ func _special_update(delta: float) -> void:
 						_sp_hits = 2
 						_already_hit.clear()
 						_special_sweep(float(_sp.reach) + 0.6, 0.0)
-						_play("light", 1.3, -5.0)
+						_play(_wsnd("swing"), 1.2)
 			if _attack_timer <= 0.0:
 				_sp_phase = "recover"
 				_attack_timer = float(_sp.recover)
@@ -2087,7 +2122,7 @@ func _special_active(fwd: Vector3) -> void:
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
 	_tween_pose(_weapon_tween, _sp.fp.strike, float(_sp.active) * 0.8, Tween.TRANS_CUBIC, Tween.EASE_OUT)
-	_play("heavy", 0.8, -2.0)
+	_play("sp_" + str(_sp.effect))
 	match _sp.effect:
 		"whirl":
 			velocity += fwd * float(_sp.lunge)
@@ -2114,7 +2149,6 @@ func _special_active(fwd: Vector3) -> void:
 			_sp_hits = 1
 			_special_sweep(float(_sp.reach) + 0.6, 0.0)
 		"rush":
-			_play("dash", 0.8, -3.0)
 			camera.fov += 8.0
 
 
@@ -2153,7 +2187,7 @@ func _special_sweep(radius: float, min_dot: float) -> int:
 					Color(0.75, 0.1, 0.08), 18)
 			_on_hit_landed(true)
 		elif result == "blocked":
-			_play("clang")
+			pass   # 부딪히는 소리는 막은 쪽이 낸다
 			Fx.sparks(get_parent(), _blade_tip.global_position, -hit_dir)
 	return count
 

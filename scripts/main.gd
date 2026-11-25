@@ -60,6 +60,9 @@ func _ready() -> void:
 
 	_warmup()
 
+	# 배경음악: 처음 화면과 연습장은 차분한 곡, 대결은 숫자 세기와 함께 긴박한 곡
+	if first_launch or mode == "practice":
+		Audio.music("menu")
 	if first_launch:
 		hud.show_menu("start")
 	else:
@@ -139,10 +142,13 @@ func _warmup() -> void:
 
 func _countdown() -> void:
 	player.controls_enabled = false
+	Audio.music("arena", 0.6)
 	for t in ["3", "2", "1"]:
 		hud.show_big(t, Color(1, 1, 1))
+		Audio.ui("countdown")
 		await get_tree().create_timer(0.7, false).timeout
 	hud.show_big("싸워라!", Color(1.0, 0.8, 0.35))
+	Audio.ui("fight")
 	player.controls_enabled = true
 	duelist.active = true
 	arena.director.running = true
@@ -156,10 +162,13 @@ func _on_round_end(player_won: bool) -> void:
 	duelist.active = false
 	player.controls_enabled = false
 	# 결정타 슬로모션
+	Audio.ui("ko")
+	Audio.music("", 0.8)
 	Engine.time_scale = 0.3
 	await get_tree().create_timer(0.9, true, false, true).timeout
 	Engine.time_scale = 1.0
 	hud.show_big("승리!" if player_won else "패배", Color(1.0, 0.85, 0.3) if player_won else Color(1.0, 0.35, 0.3))
+	Audio.stinger("victory" if player_won else "defeat", "menu")
 	await get_tree().create_timer(1.4, false).timeout
 	hud.show_menu("win" if player_won else "lose")
 
@@ -180,6 +189,8 @@ func _on_menu_choice(choice: String) -> void:
 			hud.show_menu("opponent")
 		"presets":
 			hud.show_menu("presets")
+		"sound":
+			hud.show_menu("sound")
 		"back":
 			hud.go_back()
 		"build":

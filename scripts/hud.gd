@@ -300,7 +300,37 @@ func _add_button(text: String, choice: String, primary: bool = false, width: int
 	b.custom_minimum_size = Vector2(width, 52 if primary else 44)
 	b.add_theme_font_size_override("font_size", 20 if primary else 17)
 	b.pressed.connect(func(): menu_choice.emit(choice))
+	# 누를 때 소리 (scripts/audio/audio.gd 가 버튼마다 자동으로 붙인다)
+	b.set_meta("sfx", "ui_back" if choice == "back" else ("ui_confirm" if primary else "ui_click"))
 	_menu_buttons.add_child(b)
+
+
+## 음량 조절 막대 한 줄: 이름, 막대, 퍼센트
+func _add_volume_row(text: String, bus: String) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	var name_label := Label.new()
+	name_label.text = text
+	name_label.custom_minimum_size = Vector2(110, 0)
+	name_label.add_theme_font_size_override("font_size", 19)
+	row.add_child(name_label)
+	var slider := HSlider.new()
+	slider.min_value = 0.0
+	slider.max_value = 1.0
+	slider.step = 0.05
+	slider.value = Audio.get_volume(bus)
+	slider.custom_minimum_size = Vector2(300, 32)
+	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	row.add_child(slider)
+	var pct := Label.new()
+	pct.custom_minimum_size = Vector2(60, 0)
+	pct.add_theme_font_size_override("font_size", 17)
+	pct.text = "%d%%" % roundi(slider.value * 100)
+	row.add_child(pct)
+	slider.value_changed.connect(func(v: float):
+		Audio.set_volume(bus, v)
+		pct.text = "%d%%" % roundi(v * 100))
+	_menu_buttons.add_child(row)
 
 
 ## kind: "start", "pause", "win", "lose", "opponent"(상대 고르기), "presets"(정해진 상대 목록)
@@ -318,6 +348,7 @@ func show_menu(kind: String) -> void:
 			_add_button("AI와 대결", "opponent", true)
 			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장 (허수아비)", "practice")
+			_add_button("소리 설정", "sound")
 		"pause":
 			_menu_title.text = "일시정지"
 			_menu_sub.text = ("AI와 대결 중" if _mode == "duel" else "연습장") + "\n\n내 캐릭터:  " + my_build
@@ -329,6 +360,7 @@ func show_menu(kind: String) -> void:
 				_add_button("연습장으로", "practice")
 			else:
 				_add_button("AI와 대결", "opponent")
+			_add_button("소리 설정", "sound")
 		"win":
 			_menu_title.text = "승리!"
 			_menu_sub.text = "%s을(를) 쓰러뜨렸어요" % _enemy_title
@@ -350,6 +382,13 @@ func show_menu(kind: String) -> void:
 			_add_button("정해진 상대 고르기", "presets")
 			_add_button("거울 (내 캐릭터와 똑같은 상대)", "vs_mirror")
 			_add_button("뒤로", "back")
+		"sound":
+			_menu_title.text = "소리 설정"
+			_menu_sub.text = "효과음과 배경음악 크기를 바꿀 수 있어요 (자동 저장)"
+			_add_volume_row("전체", "Master")
+			_add_volume_row("배경음악", "Music")
+			_add_volume_row("효과음", "SFX")
+			_add_button("뒤로", "back")
 		"presets":
 			_menu_title.text = "정해진 상대"
 			_menu_sub.text = "누구와 싸울까요?"
@@ -362,6 +401,8 @@ func show_menu(kind: String) -> void:
 	_overlay.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().paused = true
+	if kind == "pause":
+		Audio.duck(true)
 
 
 ## 잠깐 화면을 검게 가린다 (그 사이 효과를 미리 그려 둠).
@@ -379,6 +420,8 @@ func cover(seconds: float) -> void:
 
 ## 메뉴에서 '뒤로'
 func go_back() -> void:
+	if _menu_kind == "sound":
+		Audio.save_settings()
 	show_menu("opponent" if _menu_kind == "presets" else menu_return)
 
 
@@ -406,6 +449,7 @@ func hide_menu() -> void:
 	_menu_kind = ""
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	get_tree().paused = false
+	Audio.duck(false)
 
 
 func set_mode(m: String) -> void:
@@ -420,7 +464,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
 		if _menu_kind == "build" and _editor:
 			_on_editor_finished(false)
-		elif _menu_kind in ["opponent", "presets"]:
+		elif _menu_kind in ["opponent", "presets", "sound"]:
 			go_back()
 		elif _menu_kind == "pause":
 			hide_menu()

@@ -52,6 +52,8 @@ func _initialize() -> void:
 			_my_weapon = a.substr(7)
 		elif a.begins_with("aiweapon="):
 			_ai_weapon = a.substr(9)
+		elif a.begins_with("linger="):
+			_linger = int(a.substr(7))
 		elif a == "trace=1":
 			_trace = true
 	seed(seed_value)
@@ -93,6 +95,7 @@ func _start_duel() -> void:
 	root.add_child(_game)
 
 
+var _linger := 0
 var _last_us := 0
 var _spikes := []
 
@@ -333,6 +336,13 @@ func _duel_step() -> void:
 	if _frame == 150:
 		_shot("d1_face")
 	if not is_instance_valid(ai) or ai.dead or player.dead or _frame > 1500:
+		# 영상용: 끝난 뒤 승리/패배 음악까지 담으려고 조금 더 기다린다 (-- linger=프레임)
+		if _linger > 0:
+			_linger -= 1
+			Input.action_release("attack")
+			Input.action_release("block")
+			Input.action_release("move_forward")
+			return
 		_finish_duel(player, ai)
 		return
 	if not ai.active:

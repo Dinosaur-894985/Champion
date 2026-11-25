@@ -43,11 +43,13 @@ func _physics_process(delta: float) -> void:
 		arena.warn_ring(ring)
 		_drop_pickups_in(ring)
 		announce.emit("바깥 바닥이 곧 무너진다! 가운데로!", Color(1.0, 0.45, 0.3), false)
+		Audio.play("floor_warn")
 		_warned += 1
 	if collapsed < STAGES.size() and time >= STAGES[collapsed][0]:
 		arena.collapse_ring(STAGES[collapsed][1])
 		collapsed += 1
 		announce.emit("바닥 붕괴!", Color(1.0, 0.4, 0.25), true)
+		Audio.play("floor_collapse")
 	# 아이템
 	if time >= _next_pickup:
 		_next_pickup = time + PICKUP_EVERY
@@ -95,6 +97,7 @@ func _spawn_pickup() -> void:
 	p.setup(kind, spot)
 	arena.add_child(p)
 	pickups.append(p)
+	Audio.play("pickup_spawn", spot.pos)
 	var where: String = spot.get("name", "높은 곳")
 	announce.emit("%s에 %s 아이템!" % [where, VerticalKit.PICKUPS[kind].name], VerticalKit.PICKUPS[kind].color, false)
 

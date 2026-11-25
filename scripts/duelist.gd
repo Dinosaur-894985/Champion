@@ -113,8 +113,9 @@ var _grap_on_target := false
 var _rope: MeshInstance3D
 
 var rig: BodyRig
-var _audio: AudioStreamPlayer3D
-var _sounds := {}
+var _step_dist := 0.0
+var _was_on_floor := true
+var _fall_v := 0.0
 
 
 func _ready() -> void:
@@ -143,20 +144,6 @@ func _ready() -> void:
 	rig = BodyRig.new()
 	rig.weapon = weapon
 	add_child(rig)
-	_audio = AudioStreamPlayer3D.new()
-	_audio.unit_size = 8.0
-	_audio.max_polyphony = 4
-	add_child(_audio)
-	_sounds = {
-		"warn_light": Sfx.warn(false),
-		"warn_heavy": Sfx.warn(true),
-		"swing": Sfx.whoosh(0.24, 0.85),
-		"dash": Sfx.whoosh(0.16, 1.3),
-		"hit": Sfx.thud(0.2, false),
-		"hit_heavy": Sfx.thud(0.28, true),
-		"clang": Sfx.clang(0.45, 0.92),
-		"parry": Sfx.clang(0.7, 1.15),
-	}
 	for n in ["idle", "approach", "circle"]:
 		sm.add(n, Callable(), _neutral_update)
 	sm.add("windup", _windup_enter, _windup_update) \
@@ -178,11 +165,34 @@ func _ready() -> void:
 	sm.go("idle")
 
 
+## 효과음: 상대가 있는 자리에서 난다 (왼쪽에 있으면 왼쪽에서 들림)
 func _play(snd: String, volume: float = 0.0) -> void:
-	_audio.stream = _sounds[snd]
-	_audio.volume_db = volume
-	_audio.pitch_scale = randf_range(0.94, 1.06)
-	_audio.play()
+	Audio.play(snd, global_position + Vector3.UP * 1.2, volume)
+
+
+func _wsnd(kind: String, w: String = "") -> String:
+	return Audio.weapon_sound(kind, w if w != "" else weapon)
+
+
+## 발소리와 착지 소리
+func _footsteps(delta: float) -> void:
+	var on_floor := is_on_floor()
+	if on_floor and not _was_on_floor:
+		if _fall_v < -11.0:
+			_play("land_hard")
+		elif _fall_v < -3.0:
+			_play("land")
+		_step_dist = 0.0
+	_was_on_floor = on_floor
+	if not on_floor or state in ["dash", "stagger", "dead"]:
+		return
+	var hspeed := Vector2(velocity.x, velocity.z).length()
+	if hspeed < 1.0:
+		return
+	_step_dist += hspeed * delta
+	if _step_dist >= (2.1 if hspeed > 6.5 else 1.6):
+		_step_dist = 0.0
+		Audio.step(global_position, 2.0)
 
 
 # ---------------- 매 프레임 ----------------
@@ -199,7 +209,7 @@ func _physics_process(delta: float) -> void:
 	elif _dj_pending and velocity.y < 1.0:
 		_dj_pending = false
 		if skills.try_double_jump(5.6):
-			_play("dash", -10.0)
+			_play("double_jump")
 	skills.tick(delta)
 	_regen(delta)
 	if active and not dead:
@@ -237,7 +247,9 @@ func _physics_process(delta: float) -> void:
 	velocity.x = lerpf(velocity.x, mv.x, clampf(delta * 12.0, 0, 1))
 	velocity.z = lerpf(velocity.z, mv.z, clampf(delta * 12.0, 0, 1))
 	var pre_speed := Vector2(velocity.x, velocity.z).length()
+	_fall_v = velocity.y
 	move_and_slide()
+	_footsteps(delta)
 	_vertical_tick(delta)
 	if _thrown_t > 0.0 and is_on_wall() and pre_speed >= float(MoveSet.THROW.wall_slam_speed):
 		_wall_slam()
@@ -592,7 +604,12 @@ func _windup_enter(_d: Dictionary) -> void:
 		col = Color(0.8, 0.35, 1.0)   # 보랏빛 = 잡기: 막지 말고 때리거나 피하라
 		rig.reach = 1.0
 	rig.glow(col, 0.0)
-	_play("warn_heavy" if data.warn == "heavy" else "warn_light", -3.0)
+	if _attack == "special":
+		_play("warn_special")
+	elif _attack == "grab":
+		_play("warn_grab")
+	else:
+		_play("warn_heavy" if data.warn == "heavy" else "warn_light")
 
 
 func _windup_update(_delta: float) -> void:
@@ -652,7 +669,8 @@ func _try_feint() -> bool:
 		_windup_len = maxf(data.ai_windup * _atk_mult() * 0.75, 0.32)
 		sm.time = 0.0
 		rig.set_pose(data.body.windup, 3.0 / _windup_len)
-		_play("warn_light", -5.0)
+		_play("feint")
+		_play("warn_light", -2.0)
 		return true
 	# 멈추고 물러난다 (헛막기를 유도)
 	stats["feint_stop"] = stats.get("feint_stop", 0) + 1
@@ -671,7 +689,12 @@ func _strike_enter(_d: Dictionary) -> void:
 		_special_strike(data)
 	rig.set_pose(data.body.strike, 30.0)
 	rig.tremble = 0.0
-	_play("swing", -2.0)
+	if _attack == "special":
+		_play("sp_" + str(data.effect))
+	elif _attack == "grab":
+		_play("grab_whoosh")
+	else:
+		_play(_wsnd("swing_heavy" if _attack in ["heavy", "charge", "slash3"] else "swing"))
 
 
 func _strike_update(_delta: float) -> void:
@@ -748,7 +771,7 @@ func _dash_enter(d: Dictionary) -> void:
 	rig.dash_pulse(global_transform.basis.inverse() * v)
 	rig.glow(rig.blade_mat.emission, 0.0)
 	rig.tremble = 0.0
-	_play("dash", -6.0)
+	_play("dash")
 
 
 func _dash_update(_delta: float) -> void:
@@ -869,6 +892,7 @@ func _climb_enter(d: Dictionary) -> void:
 	rig.set_pose(MoveSet.BODY_POSES.climb, 10.0)
 	rig.glow(rig.blade_mat.emission, 0.0)
 	rig.tremble = 0.0
+	_play("climb")
 
 
 func _climb_update(_delta: float) -> void:
@@ -957,13 +981,13 @@ func _try_grab(data: Dictionary) -> void:
 	stats["grab_" + result] = stats.get("grab_" + result, 0) + 1
 	match result:
 		"thrown":
-			_play("hit_heavy")
+			_play("throw")
 			combat_event.emit("상대가 잡아 던졌다!", Color(1.0, 0.45, 0.8))
 		"beaten", "blocked":
 			_stagger(MoveSet.REACTIONS.grab_fail.time)
 			_push = -_dir * float(MoveSet.REACTIONS.grab_fail.push)
 		"clash":
-			_play("clang", -2.0)
+			_play("grab_clash")
 			_stagger(MoveSet.REACTIONS.recoil.time, false)
 			_push = -_dir * 3.0
 
@@ -1023,7 +1047,7 @@ func _take_grab(info: Dictionary, attacker: Node3D) -> String:
 	var dir := global_position - attacker.global_position
 	dir.y = 0
 	dir = dir.normalized()
-	_apply_damage(int(info.damage), dir, true)
+	_apply_damage(int(info.damage), dir, true, "grab")
 	if not dead:
 		_stagger(MoveSet.REACTIONS.thrown.time)
 		apply_throw(info.throw)
@@ -1047,7 +1071,7 @@ func _wall_slam() -> void:
 	combat_event.emit("벽꽝!", Color(1.0, 0.6, 0.3))
 	stats["wall_slam"] = stats.get("wall_slam", 0) + 1
 	var n := get_wall_normal()
-	_apply_damage(dmg, -n, true)
+	_apply_damage(dmg, -n, true, "wall_slam")
 	if not dead:
 		_stagger(MoveSet.REACTIONS.stagger.time)
 
@@ -1079,7 +1103,7 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 		return "dodged"
 	if state == "iron":
 		# 철벽: 어떤 공격이든 막는다. 기력도 줄지 않는다.
-		_play("clang", -1.0)
+		_play(_wsnd("clash"))
 		combat_event.emit("상대 철벽!", Color(1.0, 0.85, 0.4))
 		_push = dir * 1.5
 		return "blocked"
@@ -1107,13 +1131,13 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 			return "parried"
 		if info.guard == "break":
 			# 막기를 깨는 공격
-			_play("clang")
+			_play("guard_break")
 			combat_event.emit("가드 깨기!", Color(1.0, 0.75, 0.3))
 			_apply_damage(damage / 2, dir, true)
 			if not dead:
 				_stagger(MoveSet.REACTIONS.guard_break.time)
 			return "hit"
-		_play("clang", -2.0)
+		_play(_wsnd("clash"))
 		_push = dir * (4.0 if big else 2.0)
 		spend_stamina(float(BLOCK_COST.get(info.react, 12.0)) * float(info.get("pressure", 1.0)) * Weapons.stat(weapon, "block_cost"))
 		add_gauge(Weapons.GAUGE.block)
@@ -1158,7 +1182,7 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 	return "hit"
 
 
-func _apply_damage(damage: int, dir: Vector3, big: bool) -> void:
+func _apply_damage(damage: int, dir: Vector3, big: bool, sound := "") -> void:
 	hp = max(hp - damage, 0)
 	add_gauge(damage * Weapons.GAUGE.taken)
 	hp_changed.emit(hp, max_hp)
@@ -1166,7 +1190,12 @@ func _apply_damage(damage: int, dir: Vector3, big: bool) -> void:
 	var r: Dictionary = MoveSet.REACTIONS["stagger" if big else "flinch"]
 	_push = dir * float(r.push)
 	rig.hit_kick(global_transform.basis.inverse() * dir, float(r.kick))
-	_play("hit_heavy" if big else "hit")
+	if sound == "":
+		_play(_wsnd("hit", str(target.weapon) if target else ""))
+		if big:
+			_play("hit_big", -4.0)
+	elif sound != "none":
+		_play(sound)
 	Fx.impact(get_parent(), global_position + Vector3(0, 1.3, 0) - dir * 0.3, -dir + Vector3.UP * 0.4,
 			Color(0.75, 0.1, 0.08), 22 if big else 12)
 	_spawn_number(damage, big)
@@ -1175,6 +1204,7 @@ func _apply_damage(damage: int, dir: Vector3, big: bool) -> void:
 
 
 func _die(dir: Vector3) -> void:
+	Audio.loop_stop("zip_ai_%d" % get_instance_id())
 	dead = true
 	sm.go("dead")
 	active = false
@@ -1273,7 +1303,7 @@ func _blink(dir: Vector3, dist: float) -> void:
 	global_position += dir * dist
 	Fx.sparks(get_parent(), global_position + Vector3.UP, dir, 18, c)
 	_iframes = 0.3
-	_play("dash", -3.0)
+	_play("blink")
 	_announce("blink")
 
 
@@ -1331,7 +1361,7 @@ func _grapple_enter(d: Dictionary) -> void:
 	_rope.visible = true
 	rig.set_pose(MoveSet.BODY_POSES.climb, 12.0)
 	rig.glow(rig.blade_mat.emission, 0.0)
-	_play("dash", -4.0)
+	_play("grapple")
 
 
 func _grapple_target() -> Vector3:
@@ -1558,7 +1588,8 @@ func _plunge_enter(_d: Dictionary) -> void:
 	_combo_left = 0
 	rig.set_pose(_mv("plunge").body.windup, 10.0)
 	rig.glow(Color(1.0, 0.15, 0.1), 3.0)
-	_play("warn_heavy", -2.0)
+	_play("warn_heavy")
+	_play("jump")
 	combat_event.emit("위에서 내려온다!", Color(1.0, 0.45, 0.3))
 
 
@@ -1588,7 +1619,7 @@ func _plunge_impact() -> void:
 	velocity = Vector3.ZERO
 	_move = Vector3.ZERO
 	_leap_v = Vector3.ZERO
-	_play("hit_heavy", 0.0)
+	_play("plunge_impact")
 	Fx.impact(get_parent(), global_position + Vector3.UP * 0.1, Vector3.UP, Color(0.82, 0.74, 0.6), 26)
 	rig.glow(rig.blade_mat.emission, 0.0)
 	var drop := maxf(_plunge_from - global_position.y, 0.0) + 1.0
@@ -1632,6 +1663,7 @@ func _hang_enter(d: Dictionary) -> void:
 	var n: Vector3 = d.n
 	var p: Vector3 = d.point
 	global_position = Vector3(p.x, float(d.y) - 1.35, p.z) + n * 0.45
+	_play("hang")
 	velocity = Vector3.ZERO
 	_push = Vector3.ZERO
 	rotation.y = atan2(n.x, n.z)
@@ -1681,7 +1713,8 @@ func _zip_enter(d: Dictionary) -> void:
 	_zip.rider_count += 1
 	rig.set_pose(MoveSet.BODY_POSES.climb, 12.0)
 	stats["zip"] = stats.get("zip", 0) + 1
-	_play("dash", -4.0)
+	_play("zip_attach")
+	Audio.loop_start("zip_ai_%d" % get_instance_id(), "zip_loop", self, -3.0)
 
 
 func _zip_update(delta: float) -> void:
@@ -1714,6 +1747,8 @@ func _zip_update(delta: float) -> void:
 
 
 func _zip_leave(v: Vector3) -> void:
+	Audio.loop_stop("zip_ai_%d" % get_instance_id())
+	_play("zip_release")
 	if is_instance_valid(_zip):
 		_zip.rider_count -= 1
 	_zip = null
@@ -1797,7 +1832,7 @@ func _vertical_tick(delta: float) -> void:
 	if f == -1:
 		_fall_into_void()
 	elif f > 0 and not dead:
-		_apply_damage(f, Vector3.ZERO, true)
+		_apply_damage(f, Vector3.ZERO, true, "land_hard")
 		combat_event.emit("상대 추락! -%d" % f, Color(1.0, 0.8, 0.4))
 		stats["fall_damage"] = stats.get("fall_damage", 0) + f
 		if not dead:
@@ -1817,7 +1852,7 @@ func _fall_into_void() -> void:
 	if arena and arena.director.running and not dead:
 		var dmg := int(ceilf(max_hp * VerticalKit.VOID_DAMAGE))
 		combat_event.emit("상대가 낭떠러지로! -%d" % dmg, Color(1.0, 0.85, 0.35))
-		_apply_damage(dmg, Vector3.ZERO, true)
+		_apply_damage(dmg, Vector3.ZERO, true, "fall_void")
 		if not dead:
 			_back_to_neutral()
 
@@ -1849,7 +1884,7 @@ func is_hanging() -> bool:
 
 func on_pickup(kind: String) -> void:
 	_seek = null
-	_play("clang", -4.0)
+	_play("pickup_get", -3.0)
 	if kind == "power":
 		rig.glow(Color(1.0, 0.55, 0.2), 1.5)
 

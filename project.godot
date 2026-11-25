@@ -10,6 +10,10 @@ config/description="오프라인 1대1 1인칭 근접 전투 게임"
 run/main_scene="res://scenes/main.tscn"
 config/features=PackedStringArray("4.3", "Forward Plus")
 
+[autoload]
+
+AudioDirector="*res://scripts/audio/audio_director.gd"
+
 [display]
 
 window/size/viewport_width=1600

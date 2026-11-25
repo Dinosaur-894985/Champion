@@ -94,9 +94,14 @@ main 에 합쳐질 때마다 웹 버전이 자동으로 올라갑니다: https:/
 - `scripts/dummy.gd` 허수아비 (맞으면 흔들림, 체력, 쓰러졌다 다시 일어남)
 - `scripts/hud.gd` 화면 표시 (조준점, 기력, 기록, 시작 화면)
 - `scripts/lowpoly.gd` 각진 로우폴리 모양을 만드는 도우미
-- `scripts/sfx.gd` 임시 효과음
+- `scripts/audio/audio.gd` 소리 입구: `Audio.play("parry")`, `Audio.music("arena")` 처럼 부른다
+- `scripts/audio/audio_director.gd` 실제로 소리를 내는 부분 (효과음 묶음, 배경음악 교차, 음량 저장, 웹 미리 준비)
+- `scripts/audio/sound_bank.gd` 소리 목록 (자동 생성)
+- `audio/` 효과음과 배경음악 파일 (전부 코드로 합성한 오리지널, `audio/CREDITS.md`)
+- `tools/audio/` 소리를 만드는 파이썬 코드
 - `fonts/` 한글 글꼴 (나눔고딕, OFL 라이선스)
 - `tests/smoke_test.gd` 자동 점검 (허수아비 베기 + 자동 조종으로 AI와 대결)
+- `tests/audio_test.gd` 소리 점검 (소리 이름 오타, 무기별 소리, 실제 대결에서 소리가 나는지)
 - `.github/workflows/build.yml` 자동 점검, Windows 실행 파일, 웹 버전 빌드
 
 ## 개발자용
