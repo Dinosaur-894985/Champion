@@ -14,7 +14,6 @@ var hp := HP
 var size := Vector3.ONE
 var _visual: Node3D
 var _cracks: Array[MeshInstance3D] = []
-var _audio: AudioStreamPlayer3D
 
 
 func setup(pillar_id: String, center: Vector3, s: Vector3, mats: Dictionary) -> void:
@@ -59,10 +58,6 @@ func setup(pillar_id: String, center: Vector3, s: Vector3, mats: Dictionary) -> 
 		c.rotation = Vector3(0, f * PI * 0.5 + PI * 0.5, rng.randf_range(-0.6, 0.6))
 		c.visible = false
 		_cracks.append(c)
-	_audio = AudioStreamPlayer3D.new()
-	_audio.stream = Sfx.thud(0.3, true)
-	_audio.unit_size = 10.0
-	add_child(_audio)
 
 
 ## 칼(또는 낙하 찍기)에 맞았다. 플레이어/AI 공격이 같은 방법으로 부른다.
@@ -72,8 +67,7 @@ func take_hit(info: Dictionary, dir: Vector3, _attacker: Node3D = null) -> Strin
 	hp -= 2 if info.get("move", "") in STRONG else 1
 	for i in _cracks.size():
 		_cracks[i].visible = i < HP - hp
-	_audio.pitch_scale = randf_range(0.8, 1.0)
-	_audio.play()
+	Audio.play("pillar_crack", global_position + Vector3.UP * 1.5)
 	Fx.impact(get_parent(), global_position + Vector3(0, 0.3, 0) - dir * size.x * 0.5, -dir + Vector3.UP * 0.5,
 			Color(0.82, 0.72, 0.56), 14)
 	var tw := create_tween()
@@ -98,7 +92,6 @@ func _break(dir: Vector3) -> void:
 	tw.tween_callback(func():
 		Fx.impact(get_parent(), global_position + dir * size.y * 0.6 + Vector3.DOWN * size.y * 0.4, Vector3.UP,
 				Color(0.82, 0.72, 0.56), 40)
-		_audio.pitch_scale = 0.6
-		_audio.play())
+		Audio.play("pillar_break", global_position))
 	tw.tween_property(_visual, "position:y", -size.y * 0.5 - 3.0, 1.6).set_delay(0.6)
 	tw.tween_callback(func(): _visual.visible = false)

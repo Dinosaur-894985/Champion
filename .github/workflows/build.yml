@@ -48,6 +48,11 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/vertical_test.gd 2>&1 | tee vertical.log
           grep -q "VERTICAL => OK" vertical.log
 
+      - name: 자동 점검 (효과음, 배경음악)
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/audio_test.gd 2>&1 | tee audio.log
+          grep -q "AUDIO => OK" audio.log
+
       - name: Windows 실행 파일 만들기
         run: |
           mkdir -p build/windows

@@ -19,9 +19,6 @@ var _hp_fill: MeshInstance3D
 var _wobble := Vector2.ZERO       # 흔들리는 각도 (x: 앞뒤, y: 좌우)
 var _wobble_vel := Vector2.ZERO
 var _flash := 0.0
-var _audio: AudioStreamPlayer3D
-var _thud_light: AudioStreamWAV
-var _thud_heavy: AudioStreamWAV
 
 
 func _ready() -> void:
@@ -29,11 +26,6 @@ func _ready() -> void:
 	collision_layer = 2
 	collision_mask = 0
 	_build()
-	_thud_light = Sfx.thud(0.18, false)
-	_thud_heavy = Sfx.thud(0.26, true)
-	_audio = AudioStreamPlayer3D.new()
-	_audio.unit_size = 6.0
-	add_child(_audio)
 
 
 func _build() -> void:
@@ -121,9 +113,7 @@ func take_hit(info: Dictionary, dir: Vector3, _attacker: Node3D = null) -> Strin
 	var push := (0.9 if heavy else 0.5)
 	_wobble_vel += Vector2(local_dir.z, -local_dir.x) * push * 9.0
 	_flash = 1.0
-	_audio.stream = _thud_heavy if heavy else _thud_light
-	_audio.pitch_scale = randf_range(0.9, 1.1)
-	_audio.play()
+	Audio.play("dummy_hit", global_position + Vector3.UP * 1.2, 2.0 if heavy else 0.0, 0.85 if heavy else 1.0)
 	_spawn_number(damage, heavy)
 	hit_taken.emit(damage)
 	Fx.impact(get_parent(), global_position + Vector3(0, 1.2, 0) - dir * 0.3, -dir + Vector3.UP * 0.5,
@@ -144,6 +134,7 @@ func take_grab(info: Dictionary, attacker: Node3D) -> String:
 func _fall(local_dir: Vector3) -> void:
 	down = true
 	knocked_down.emit()
+	Audio.play("dummy_fall", global_position + Vector3.UP * 0.5)
 	var dir2 := Vector2(local_dir.z, -local_dir.x)
 	if dir2.length() < 0.1:
 		dir2 = Vector2(1, 0)
