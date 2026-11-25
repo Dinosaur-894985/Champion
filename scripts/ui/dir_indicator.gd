@@ -6,8 +6,8 @@ extends Control
 ##   하얀 굵은 호           : 내가 막고 있는 방향
 ##   바깥쪽 청록 호         : 상대가 막고 있는 방향 → 다른 방향으로 베거나 잡아라
 
-const R := 40.0          # 안쪽 호 반지름
-const R_OUT := 54.0      # 상대 막기 표시 반지름
+const R := 52.0          # 안쪽 호 반지름
+const R_OUT := 70.0      # 상대 막기 표시 반지름
 const SPAN := 0.62       # 호 하나의 폭 (라디안의 절반)
 
 var player: Player
@@ -57,13 +57,13 @@ func _draw() -> void:
 	var c := size * 0.5
 	# 바탕: 세 방향 자리를 옅게
 	for dir in AttackDir.ALL:
-		_arc(c, R, dir, Color(1, 1, 1, 0.13), 2.0)
+		_arc(c, R, dir, Color(1, 1, 1, 0.18), 2.5)
 	# 내 막기
 	if player.blocking:
 		_arc(c, R, player.guard_dir, Color(1, 1, 1, 0.95), 5.0)
 	# 상대 막기
 	if opponent and is_instance_valid(opponent) and opponent.state == "block":
-		_arc(c, R_OUT, opponent.guard_dir, Color(0.3, 0.95, 0.9, 0.9), 4.0)
+		_arc(c, R_OUT, opponent.guard_dir, Color(0.3, 0.95, 0.9, 0.95), 6.0)
 	# 상대 공격 예고
 	if _enemy_dir == "grab":
 		var a := 0.45 + 0.55 * _enemy_k
