@@ -55,8 +55,8 @@ const WEAPONS := {
 	},
 	"greatsword": {
 		"name": "대검", "desc": "느리지만 한 방이 크다. 휘두르는 동안 잔매에 끊기지 않고, 막혀도 상대 기력을 크게 깎는다",
-		"time": 1.32, "damage": 1.4, "cost": 1.3, "reach": 0.55, "lunge": 0.85,
-		"speed": 0.92, "block_cost": 0.65, "pressure": 1.7, "parry": 0.8, "armor": true,
+		"time": 1.32, "damage": 1.3, "cost": 1.3, "reach": 0.55, "lunge": 0.85,
+		"speed": 0.92, "block_cost": 0.65, "pressure": 1.45, "parry": 0.8, "armor": true,
 		"moves": {
 			# 크게 휘두르는 마지막 베기와 내려찍기는 맞은 상대를 크게 밀어낸다
 			"slash3": {"react": "stagger", "push_add": 3.0},

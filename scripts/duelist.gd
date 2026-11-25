@@ -424,7 +424,8 @@ func on_target_attack(kind: String) -> void:
 			_dash_dir(-1.0, 0.3)
 		return
 	guard_dir = _read_dir(dir)
-	var big := kind in ["heavy", "charge", "special"]
+	# 막기를 깨는 공격, 필살기, 잔매에 끊기지 않는 대검은 막기보다 피하는 편이 낫다
+	var big := kind in ["heavy", "charge", "special"] or (Weapons.has_armor(target.weapon) and kind != "grab")
 	# 상대가 자주 속이면 서둘러 막지 않는다
 	var block := (block_chance + (0.25 if _alert > 0.0 else 0.0)) * (1.0 - mind.feint_rate * 0.6)
 	var dodge := dodge_chance
