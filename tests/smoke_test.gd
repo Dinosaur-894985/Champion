@@ -23,6 +23,8 @@ var _bot := "good"   # good: 막고 튕겨내는 자동 조종, masher: 막지 �
 var _moves := {}
 var _counters := 0
 var _dodge_side := 1.0
+var _ai_preset := "검객"
+var _my_preset := ""
 
 
 func _initialize() -> void:
@@ -36,13 +38,25 @@ func _initialize() -> void:
 			_bot = a.substr(4)
 		elif a.begins_with("only="):
 			_only = a.substr(5)
+		elif a.begins_with("preset="):
+			_ai_preset = a.substr(7)
+		elif a.begins_with("me="):
+			_my_preset = a.substr(3)
 	seed(seed_value)
+	# 매번 같은 결과가 나오도록 상대와 내 캐릭터를 정해 둔다
+	Game.opponent_mode = "preset"
+	Game.opponent_preset = _ai_preset
+	Game.current_opponent = null
+	Game.test_player_build = CharacterBuild.new() if _my_preset == "" else CharacterBuild.preset(_my_preset)
+	_check_build_rules()
 	if _only == "duel":
 		_start_duel()
 	elif _only == "parkour":
 		_start_parkour()
 	elif _only == "chase":
 		_start_chase()
+	elif _only == "skills":
+		_start_skills()
 	else:
 		Game.next_mode = "practice"
 		_game = GAME.instantiate()
@@ -74,6 +88,8 @@ func _process(_delta: float) -> bool:
 		_parkour_step()
 	elif _phase == "chase":
 		_chase_step()
+	elif _phase == "skills":
+		_skills_step()
 	elif _phase == "duel":
 		_duel_step()
 	return false
@@ -253,7 +269,7 @@ func _chase_step() -> void:
 			if _only == "chase":
 				_report_and_quit()
 			else:
-				_start_duel()
+				_start_skills()
 			return
 		_goal_start = _frame
 		_set_goal(player, ai)
@@ -264,6 +280,7 @@ func _set_goal(player: Player, ai: Duelist) -> void:
 	player.global_position = g[0]
 	player.velocity = Vector3.ZERO
 	ai.traits["wall_climb"] = g[2]
+	ai.skills._cd["grapple"] = 999.0   # 갈고리 지름길 없이 길찾기만 본다
 	ai.global_position = Vector3(0, 0.1, 0)
 	ai.velocity = Vector3.ZERO
 	ai._repath_t = 0.0
@@ -397,7 +414,7 @@ func _finish_duel(player: Player, ai: Duelist) -> void:
 		_fail.clear()
 		if _results.is_empty():
 			_fail.append("AI never attacked")
-	elif ai_hp >= Duelist.MAX_HP:
+	elif ai_hp >= ai.max_hp:
 		_fail.append("could not damage AI")
 	if _bot == "good" and not (_results.has("blocked") or _results.has("parried")):
 		_fail.append("block/parry never worked")
@@ -425,3 +442,174 @@ func _shot(shot_name: String) -> void:
 	await RenderingServer.frame_post_draw
 	var img := root.get_texture().get_image()
 	img.save_png(_shots_dir.path_join(shot_name + ".png"))
+
+
+# ---------------- 빌드 규칙 ----------------
+
+func _check_build_rules() -> void:
+	var bad := []
+	for n in CharacterBuild.PRESET_ORDER:
+		if not CharacterBuild.preset(n).is_valid():
+			bad.append("preset " + n)
+	if not CharacterBuild.new().is_valid():
+		bad.append("default")
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for i in 200:
+		var b := CharacterBuild.random_build(rng)
+		if not b.is_valid() or b.remaining() != 0:
+			bad.append("random %s" % b.summary())
+			break
+	# 비싼 스킬을 고르면 능력치가 깎여서 점수 안에 들어온다
+	var t := CharacterBuild.new()
+	for k in CharacterBuild.STAT_ORDER:
+		t.stats[k] = 6   # 30점 모두 능력치에
+	t.skills = []
+	t.toggle_skill("blink")
+	t.toggle_skill("iron_guard")
+	if not t.is_valid() or t.skills.size() != 2 or t.remaining() != 0:
+		bad.append("toggle %s" % t.summary())
+	if t.toggle_skill("haste"):
+		bad.append("third skill allowed")
+	print("BUILD rules presets=%d  => %s %s" % [CharacterBuild.PRESET_ORDER.size(), "OK" if bad.is_empty() else "FAIL", bad])
+	if not bad.is_empty():
+		_fail.append("build rules")
+
+
+# ---------------- 특수 스킬 ----------------
+# 1) 점멸 + 갈고리 (연습장)  2) 이중 점프 + 질풍 (연습장)  3) 철벽 (대결: AI 공격을 막는다)
+
+var _sk_part := 0
+var _sk := {}
+
+
+func _start_skills() -> void:
+	_phase = "skills"
+	_frame = 0
+	_sk_part += 1
+	var b := CharacterBuild.new()
+	match _sk_part:
+		1:
+			b.skills = ["blink", "grapple"]
+			Game.next_mode = "practice"
+		2:
+			b.skills = ["double_jump", "haste"]
+			Game.next_mode = "practice"
+		3:
+			b.skills = ["iron_guard", "haste"]
+			Game.next_mode = "duel"
+	Game.test_player_build = b
+	_game = GAME.instantiate()
+	root.add_child(_game)
+
+
+func _skills_step() -> void:
+	var player: Player = _game.player
+	if _frame == 3:
+		_game.hud.hide_menu()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		player.rotation.y = 0.0
+		player.head.rotation.x = 0.0
+	match _sk_part:
+		1:
+			_skills_blink_grapple(player)
+		2:
+			_skills_jump_haste(player)
+		3:
+			_skills_iron(player)
+
+
+func _skills_blink_grapple(player: Player) -> void:
+	if _frame == 6:
+		_sk.z0 = player.global_position.z
+		player.use_skill_slot(0)
+	if _frame == 8:
+		_shot("s1_blink")
+		var moved: float = _sk.z0 - player.global_position.z
+		var again := player.use_skill("blink")   # 쿨타임이라 안 돼야 한다
+		var ok := moved > 4.0 and not again
+		print("SKILL blink moved=%.2f second_use=%s  => %s" % [moved, again, "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("blink")
+		# 북동쪽 기둥을 올려다보고 갈고리
+		player.global_position = Vector3(10, 0.1, 3.0)
+		player.velocity = Vector3.ZERO
+		player.rotation.y = 0.0
+		player.head.rotation.x = deg_to_rad(15)
+		_max_y = 0.0
+	if _frame == 12:
+		player.use_skill_slot(1)
+		_sk.grap = player.sm.state
+	if player.sm.state == "grapple" and player.sm.time > 0.2:
+		_shot_once("s2_grapple")
+	_max_y = maxf(_max_y, player.global_position.y)
+	if _frame == 120:
+		var ok: bool = _sk.grap == "grapple" and player.global_position.z < -2.0 and _max_y > 2.0
+		print("SKILL grapple state=%s z=%.2f max_y=%.2f  => %s" % [_sk.grap, player.global_position.z, _max_y, "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("grapple")
+		_game.queue_free()
+		_start_skills()
+
+
+func _skills_jump_haste(player: Player) -> void:
+	if _frame == 30:
+		_max_y = 0.0
+		_sk.y0 = player.global_position.y
+		Input.action_press("jump")
+	if _frame == 32:
+		Input.action_release("jump")
+	if _frame == 62:
+		Input.action_press("jump")   # 공중에서 한 번 더
+	if _frame == 64:
+		Input.action_release("jump")
+	_max_y = maxf(_max_y, player.global_position.y)
+	if _frame == 72:
+		_shot("s3_double_jump")
+	if _frame == 130:
+		var h: float = _max_y - _sk.y0
+		var ok := h > 2.0
+		print("SKILL double_jump height=%.2f  => %s" % [h, "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("double jump")
+		player.use_skill_slot(1)
+		Input.action_press("move_forward")
+		_sk.z0 = player.global_position.z
+	if _frame == 190:
+		Input.action_release("move_forward")
+		var dist: float = _sk.z0 - player.global_position.z
+		# 걷기만 하면 1초에 4.5m 쯤 → 질풍이면 5.3m 넘게
+		var ok: bool = player.skills.haste_active() and dist > 5.3
+		print("SKILL haste walked=%.2f  => %s" % [dist, "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("haste")
+		_game.queue_free()
+		_start_skills()
+
+
+func _skills_iron(player: Player) -> void:
+	var ai: Duelist = _game.duelist
+	if _frame == 3:
+		player.attack_received.connect(func(r): _sk[r] = _sk.get(r, 0) + 1)
+		player.hp = 100000
+	if not ai.active:
+		return
+	var to_ai := ai.global_position - player.global_position
+	to_ai.y = 0
+	# 등을 돌리고 있어도 철벽은 막아야 한다
+	player.rotation.y = atan2(to_ai.x, to_ai.z)
+	if ai.state == "windup" and player.sm.state == "free" and to_ai.length() < 3.2:
+		player.use_skill_slot(0)
+	if player.sm.state == "iron":
+		_shot_once("s4_iron")
+	if _sk.get("blocked", 0) >= 1 or _frame > 900:
+		var ok: bool = _sk.get("blocked", 0) >= 1 and _sk.get("hit", 0) == 0
+		print("SKILL iron_guard results=%s  => %s" % [_sk, "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("iron guard")
+		_game.queue_free()
+		Game.test_player_build = CharacterBuild.new() if _my_preset == "" else CharacterBuild.preset(_my_preset)
+		if _only == "skills":
+			_report_and_quit()
+		else:
+			_start_duel()

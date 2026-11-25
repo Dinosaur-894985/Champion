@@ -4,6 +4,16 @@ extends CanvasLayer
 signal menu_choice(choice: String)
 
 const FONT := preload("res://fonts/NanumGothic-Bold.ttf")
+const BUILD_EDITOR := preload("res://scripts/ui/build_editor.gd")
+
+## '뒤로' 를 누르면 돌아갈 메뉴 (start / pause / win / lose)
+var menu_return := "start"
+var _player: Player
+var _slots := []          # 스킬 칸: {"skill", "panel", "fill", "name", "key", "time"}
+var _haste_label: Label
+var _enemy_name: Label
+var _enemy_stamina: ProgressBar
+var _editor: Control
 
 var _root: Control
 var _crosshair: Control
@@ -122,17 +132,32 @@ func _ready() -> void:
 	_enemy_box.position = Vector2(-220, 24)
 	_enemy_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_enemy_box)
-	var en := _small_label("결투사")
-	en.size = Vector2(440, 20)
-	en.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_enemy_box.add_child(en)
+	_enemy_name = _small_label("결투사")
+	_enemy_name.size = Vector2(440, 20)
+	_enemy_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_enemy_box.add_child(_enemy_name)
 	_enemy_bar = _make_bar(Color(0.1, 0.65, 0.66), Vector2(440, 14))
 	_enemy_bar.position = Vector2(0, 26)
 	_enemy_box.add_child(_enemy_bar)
+	_enemy_stamina = _make_bar(Color(0.95, 0.80, 0.35, 0.85), Vector2(440, 5))
+	_enemy_stamina.position = Vector2(0, 44)
+	_enemy_box.add_child(_enemy_stamina)
+
+	# 특수 스킬 칸 (오른쪽 아래)
+	for i in 2:
+		_slots.append(_make_slot(i))
+	_haste_label = Label.new()
+	_haste_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_haste_label.position = Vector2(-160, -100)
+	_haste_label.size = Vector2(320, 24)
+	_haste_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_haste_label.add_theme_font_size_override("font_size", 18)
+	_haste_label.modulate = Color(0.55, 1.0, 0.7)
+	_root.add_child(_haste_label)
 
 	# 조작법 (왼쪽 위)
 	_help = Label.new()
-	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n벽을 보고 W + Space  벽 타고 오르기 (위에서 W 누른 채 올라섬)\n벽 옆을 달리다 Space  벽 달리기 (달리는 중 Space: 벽 차고 뛰기)\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\n오른쪽 클릭  막기 (맞기 직전에 누르면 튕겨내기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
+	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n벽을 보고 W + Space  벽 타고 오르기 (위에서 W 누른 채 올라섬)\n벽 옆을 달리다 Space  벽 달리기 (달리는 중 Space: 벽 차고 뛰기)\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\nE / R  특수 스킬 (오른쪽 아래 칸)\n오른쪽 클릭  막기 (맞기 직전에 누르면 튕겨내기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
 	_help.add_theme_font_size_override("font_size", 15)
 	_help.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
 	_help.add_theme_constant_override("outline_size", 5)   # 밝은 경기장에서도 읽히게
@@ -240,46 +265,70 @@ func _make_overlay() -> Control:
 	return panel
 
 
-func _add_button(text: String, choice: String, primary: bool = false) -> void:
+func _add_button(text: String, choice: String, primary: bool = false, width: int = 340) -> void:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(280, 52 if primary else 44)
+	b.custom_minimum_size = Vector2(width, 52 if primary else 44)
 	b.add_theme_font_size_override("font_size", 20 if primary else 17)
 	b.pressed.connect(func(): menu_choice.emit(choice))
 	_menu_buttons.add_child(b)
 
 
-## kind: "start", "pause", "win", "lose"
+## kind: "start", "pause", "win", "lose", "opponent"(상대 고르기), "presets"(정해진 상대 목록)
 func show_menu(kind: String) -> void:
+	if kind in ["start", "pause", "win", "lose"]:
+		menu_return = kind
 	_menu_kind = kind
 	for c in _menu_buttons.get_children():
 		c.queue_free()
+	var my_build := _player.build.summary() if _player else ""
 	match kind:
 		"start":
 			_menu_title.text = "챔피언"
-			_menu_sub.text = "1대1 칼싸움"
-			_add_button("AI와 대결", "duel", true)
+			_menu_sub.text = "1대1 칼싸움\n\n내 캐릭터:  " + my_build
+			_add_button("AI와 대결", "opponent", true)
+			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장 (허수아비)", "practice")
 		"pause":
 			_menu_title.text = "일시정지"
-			_menu_sub.text = "AI와 대결 중" if _mode == "duel" else "연습장"
+			_menu_sub.text = ("AI와 대결 중" if _mode == "duel" else "연습장") + "\n\n내 캐릭터:  " + my_build
 			_add_button("계속하기", "resume", true)
 			_add_button("처음부터 다시", "retry")
+			_add_button("캐릭터 만들기", "build")
 			if _mode == "duel":
+				_add_button("다른 상대 고르기", "opponent")
 				_add_button("연습장으로", "practice")
 			else:
-				_add_button("AI와 대결", "duel")
+				_add_button("AI와 대결", "opponent")
 		"win":
 			_menu_title.text = "승리!"
-			_menu_sub.text = "결투사를 쓰러뜨렸어요"
+			_menu_sub.text = "%s을(를) 쓰러뜨렸어요" % _enemy_title
 			_add_button("다시 대결", "retry", true)
+			_add_button("다른 상대 고르기", "opponent")
+			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장으로", "practice")
 		"lose":
 			_menu_title.text = "패배"
 			_menu_sub.text = "빛나는 칼을 보면 막거나(오른쪽 클릭) 옆으로 대시(Shift)하세요"
 			_add_button("다시 대결", "retry", true)
+			_add_button("다른 상대 고르기", "opponent")
+			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장으로", "practice")
-	if not OS.has_feature("web"):
+		"opponent":
+			_menu_title.text = "상대 고르기"
+			_menu_sub.text = "AI 도 나와 같은 규칙(점수 %d점, 스킬 2개)으로 만들어져요" % CharacterBuild.POINTS
+			_add_button("랜덤 상대", "vs_random", true)
+			_add_button("정해진 상대 고르기", "presets")
+			_add_button("거울 (내 캐릭터와 똑같은 상대)", "vs_mirror")
+			_add_button("뒤로", "back")
+		"presets":
+			_menu_title.text = "정해진 상대"
+			_menu_sub.text = "누구와 싸울까요?"
+			for n in CharacterBuild.PRESET_ORDER:
+				var b := CharacterBuild.preset(n)
+				_add_button("%s   ·   %s" % [n, b.summary()], "vs_preset:" + n, false, 760)
+			_add_button("뒤로", "back")
+	if kind in ["start", "pause", "win", "lose"] and not OS.has_feature("web"):
 		_add_button("게임 종료", "quit")
 	_overlay.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -299,6 +348,30 @@ func cover(seconds: float) -> void:
 	tw.tween_callback(rect.queue_free)
 
 
+## 메뉴에서 '뒤로'
+func go_back() -> void:
+	show_menu("opponent" if _menu_kind == "presets" else menu_return)
+
+
+## 캐릭터 만들기 화면을 연다
+func open_build_editor(b: CharacterBuild) -> void:
+	_overlay.visible = false
+	_menu_kind = "build"
+	_editor = BUILD_EDITOR.new()
+	_editor.setup(b)
+	_editor.finished.connect(_on_editor_finished)
+	_root.add_child(_editor)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_tree().paused = true
+
+
+func _on_editor_finished(saved: bool) -> void:
+	_editor.queue_free()
+	_editor = null
+	_overlay.visible = true
+	menu_choice.emit("build_saved" if saved else "build_cancel")
+
+
 func hide_menu() -> void:
 	_overlay.visible = false
 	_menu_kind = ""
@@ -309,13 +382,18 @@ func hide_menu() -> void:
 func set_mode(m: String) -> void:
 	_mode = m
 	_enemy_box.visible = m == "duel"
+	_enemy_stamina.visible = m == "duel"
 	_hp_box.visible = m == "duel"
 	_stats.visible = m == "practice"
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
-		if _menu_kind == "pause":
+		if _menu_kind == "build" and _editor:
+			_on_editor_finished(false)
+		elif _menu_kind in ["opponent", "presets"]:
+			go_back()
+		elif _menu_kind == "pause":
 			hide_menu()
 		elif _menu_kind == "":
 			show_menu("pause")
@@ -344,6 +422,113 @@ func set_enemy_hp(value: int, max_value: int) -> void:
 	_enemy_bar.max_value = max_value
 	var tw := create_tween()
 	tw.tween_property(_enemy_bar, "value", float(value), 0.15)
+
+
+func set_enemy_stamina(value: float, max_value: float) -> void:
+	_enemy_stamina.max_value = max_value
+	_enemy_stamina.value = value
+
+
+var _enemy_title := "결투사"
+
+
+## 상대 이름과 스킬을 위에 보여준다
+func set_enemy(b: CharacterBuild) -> void:
+	_enemy_title = b.name
+	var sk := []
+	for s in b.skills:
+		sk.append(CharacterBuild.SKILLS[s].name)
+	_enemy_name.text = b.name + ("   ·   " + ", ".join(sk) if not sk.is_empty() else "")
+	set_enemy_hp(b.max_hp(), b.max_hp())
+	_enemy_bar.value = b.max_hp()
+	set_enemy_stamina(b.max_stamina(), b.max_stamina())
+
+
+## 내 캐릭터: 스킬 칸을 채운다
+func set_player(p: Player) -> void:
+	_player = p
+	for i in _slots.size():
+		var slot: Dictionary = _slots[i]
+		if i >= p.build.skills.size():
+			slot.panel.visible = false
+			continue
+		var s: String = p.build.skills[i]
+		var d: Dictionary = CharacterBuild.SKILLS[s]
+		slot.skill = s
+		slot.panel.visible = true
+		slot.name.text = d.name
+		slot.key.text = ["E", "R"][i] if d.active else "자동"
+
+
+func _make_slot(i: int) -> Dictionary:
+	var panel := Panel.new()
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0, 0, 0, 0.45)
+	sb.set_corner_radius_all(8)
+	sb.border_color = Color(1, 1, 1, 0.25)
+	sb.set_border_width_all(2)
+	panel.add_theme_stylebox_override("panel", sb)
+	panel.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	panel.size = Vector2(104, 74)
+	panel.position = Vector2(-248 + i * 116, -100)
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.visible = false
+	_root.add_child(panel)
+	# 쿨타임: 아래에서부터 어둡게 덮였다가 줄어든다
+	var fill := ColorRect.new()
+	fill.color = Color(0, 0, 0, 0.55)
+	fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fill.position = Vector2(2, 2)
+	fill.size = Vector2(100, 0)
+	panel.add_child(fill)
+	var key := Label.new()
+	key.position = Vector2(8, 4)
+	key.add_theme_font_size_override("font_size", 15)
+	key.modulate = Color(1.0, 0.8, 0.4)
+	panel.add_child(key)
+	var nm := Label.new()
+	nm.position = Vector2(0, 26)
+	nm.size = Vector2(104, 24)
+	nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	nm.add_theme_font_size_override("font_size", 18)
+	panel.add_child(nm)
+	var t := Label.new()
+	t.position = Vector2(0, 48)
+	t.size = Vector2(104, 20)
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.add_theme_font_size_override("font_size", 14)
+	panel.add_child(t)
+	return {"skill": "", "panel": panel, "fill": fill, "name": nm, "key": key, "time": t, "style": sb}
+
+
+func _update_slots() -> void:
+	if _player == null or not is_instance_valid(_player):
+		return
+	var kit := _player.skills
+	for slot in _slots:
+		if slot.skill == "" or not slot.panel.visible:
+			continue
+		var s: String = slot.skill
+		var d: Dictionary = CharacterBuild.SKILLS[s]
+		var ratio := 0.0
+		var text := ""
+		var ok := true
+		if d.active:
+			ratio = kit.cooldown_ratio(s)
+			if kit.cooldown_left(s) > 0.0:
+				text = "%.0f초" % ceilf(kit.cooldown_left(s))
+				ok = false
+			elif _player.stamina < float(d.stamina):
+				text = "기력 부족"
+				ok = false
+		elif s == "double_jump" and not kit.double_jump_left():
+			ok = false
+		slot.fill.size.y = 70.0 * ratio
+		slot.fill.position.y = 2.0 + 70.0 * (1.0 - ratio)
+		slot.time.text = text
+		slot.panel.modulate.a = 1.0 if ok else 0.7
+		(slot.style as StyleBoxFlat).border_color = Color(1.0, 0.8, 0.4, 0.8) if ok and d.active else Color(1, 1, 1, 0.25)
+	_haste_label.text = "질풍  %.1f초" % kit.haste_left() if kit.haste_active() else ""
 
 
 func on_player_damaged(_amount: int) -> void:
@@ -382,6 +567,7 @@ func show_big(text: String, color: Color) -> void:
 
 
 func _process(delta: float) -> void:
+	_update_slots()
 	_pulse = maxf(_pulse - delta * 5.0, 0.0)
 	var ch := _crosshair as Crosshair
 	ch.pulse = _pulse
