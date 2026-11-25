@@ -17,6 +17,8 @@ var _help: Label
 var _event_label: Label
 var _big_label: Label
 var _vignette: TextureRect
+var _counter_vignette: TextureRect
+var _counter := 0.0
 var _overlay: Control
 var _menu_title: Label
 var _menu_sub: Label
@@ -69,6 +71,25 @@ func _ready() -> void:
 	_vignette.modulate.a = 0.0
 	_root.add_child(_vignette)
 
+	# 회피 반격 기회: 화면 가장자리가 푸르게 빛난다
+	var cgrad := Gradient.new()
+	cgrad.offsets = PackedFloat32Array([0.0, 0.6, 1.0])
+	cgrad.colors = PackedColorArray([Color(0.3, 0.8, 1, 0), Color(0.3, 0.8, 1, 0), Color(0.35, 0.85, 1.0, 0.75)])
+	var ctex := GradientTexture2D.new()
+	ctex.gradient = cgrad
+	ctex.fill = GradientTexture2D.FILL_RADIAL
+	ctex.fill_from = Vector2(0.5, 0.5)
+	ctex.fill_to = Vector2(1.05, 1.05)
+	ctex.width = 256
+	ctex.height = 256
+	_counter_vignette = TextureRect.new()
+	_counter_vignette.texture = ctex
+	_counter_vignette.stretch_mode = TextureRect.STRETCH_SCALE
+	_counter_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_counter_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_counter_vignette.modulate.a = 0.0
+	_root.add_child(_counter_vignette)
+
 	_crosshair = Crosshair.new()
 	_crosshair.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -111,7 +132,7 @@ func _ready() -> void:
 
 	# 조작법 (왼쪽 위)
 	_help = Label.new()
-	_help.text = "W A S D  이동\nShift  대시 (누르고 있으면 달리기)\nSpace  점프\n왼쪽 클릭  베기 (연속으로 누르면 연속 베기)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\n오른쪽 클릭  막기 (맞기 직전에 누르면 튕겨내기)\nEsc  메뉴"
+	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\n오른쪽 클릭  막기 (맞기 직전에 누르면 튕겨내기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
 	_help.add_theme_font_size_override("font_size", 15)
 	_help.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
 	_help.position = Vector2(24, 20)
@@ -332,6 +353,10 @@ func set_stats(hits: int, knockdowns: int) -> void:
 	_stats.text = "맞힌 횟수  %d\n쓰러뜨린 허수아비  %d" % [hits, knockdowns]
 
 
+func set_counter_window(open: bool) -> void:
+	_counter = 1.0 if open else 0.0
+
+
 func pulse_crosshair() -> void:
 	_pulse = 1.0
 
@@ -366,3 +391,7 @@ func _process(delta: float) -> void:
 	if _low_hp:
 		low = 0.35 + sin(Time.get_ticks_msec() / 1000.0 * 6.0) * 0.15
 	_vignette.modulate.a = maxf(_damage_flash, low)
+	var target_a := 0.0
+	if _counter > 0.0:
+		target_a = 0.75 + sin(Time.get_ticks_msec() / 1000.0 * 18.0) * 0.25
+	_counter_vignette.modulate.a = move_toward(_counter_vignette.modulate.a, target_a, delta * 6.0)

@@ -17,7 +17,10 @@ var _fail := []
 var _results := {}
 var _min_dist := 99.0
 var _parries := 0
-var _bot := "good"   # good: 막고 튕겨내는 자동 조종, masher: 막지 않고 마구 베기만
+var _bot := "good"   # good: 막고 튕겨내는 자동 조종, masher: 막지 않고 마구 베기만, dodger: 옆으로 피하고 반격
+var _moves := {}
+var _counters := 0
+var _dodge_side := 1.0
 
 
 func _initialize() -> void:
@@ -76,18 +79,40 @@ func _practice_step() -> void:
 		Input.action_press("move_forward")
 	if _frame == 100:
 		Input.action_release("move_forward")
-	if _frame == 110 or _frame == 140:
-		player._request_attack("light")
+	if _frame == 4:
+		player.attack_started.connect(func(m): _moves[m] = _moves.get(m, 0) + 1)
+	# 연속 베기: 짧게 세 번 클릭
+	if _frame in [110, 122, 134]:
+		_click(player, true)
+	if _frame in [113, 125, 137]:
+		_click(player, false)
 	if _frame == 117:
 		_shot("p2_swing")
+	if _frame == 145:
+		_shot("p3_finisher")
+	# 차지 베기: 길게 눌렀다 떼기
 	if _frame == 175:
+		_click(player, true)
+	if _frame == 215:
+		_shot("p4_charge")
+	if _frame == 250:
+		_click(player, false)
+	if _frame == 290:
 		player._request_attack("heavy")
-	if _frame == 230:
+	# 옆으로 대시
+	if _frame == 340:
+		Input.action_press("move_left")
 		player.try_dash()
-	if _frame == 260:
-		print("PRACTICE hits=%d  => %s" % [_game.hits, "OK" if _game.hits >= 3 else "FAIL"])
-		if _game.hits < 3:
-			_fail.append("practice hits")
+	if _frame == 344:
+		_shot("p5_dash_left")
+	if _frame == 350:
+		Input.action_release("move_left")
+	if _frame == 380:
+		var ok: bool = _game.hits >= 3 and _moves.has("slash3") and _moves.has("charge") \
+				and player.sm.counts.get("dash", 0) >= 1
+		print("PRACTICE hits=%d moves=%s  => %s" % [_game.hits, _moves, "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("practice moves")
 		_game.queue_free()
 		_start_duel()
 
@@ -120,6 +145,9 @@ func _autopilot(player: Player, ai: Duelist) -> void:
 	player.rotation.y = atan2(-to_ai.x, -to_ai.z)
 	player.head.rotation.x = deg_to_rad(-6)
 
+	if _bot == "dodger":
+		_dodger(player, ai, dist)
+		return
 	if _bot == "masher":
 		if dist > 2.0:
 			Input.action_press("move_forward")
@@ -131,7 +159,7 @@ func _autopilot(player: Player, ai: Duelist) -> void:
 	var threat := ai.state == "windup"
 	var time_left := 1.0
 	if threat:
-		time_left = Duelist.ATTACKS[ai._attack].windup - ai._state_t
+		time_left = MoveSet.MOVES[ai._attack].ai_windup - ai._state_t
 	# 막기: 앞쪽 공격은 칼이 닿기 직전에 눌러서 튕겨내기를 노린다
 	if threat and time_left < 0.12 and dist < 3.2:
 		Input.action_press("block")
@@ -147,6 +175,39 @@ func _autopilot(player: Player, ai: Duelist) -> void:
 		player._request_attack("light")
 
 
+func _click(player: Player, down: bool) -> void:
+	if down:
+		Input.action_press("attack")
+		player.attack_pressed()
+	else:
+		Input.action_release("attack")
+		player.attack_released()
+
+
+## 상대가 휘두르기 직전에 옆으로 대시하고, 반격 기회가 오면 바로 벤다.
+func _dodger(player: Player, ai: Duelist, dist: float) -> void:
+	Input.action_release("move_left")
+	Input.action_release("move_right")
+	if player.counter_ready():
+		_counters += 1
+		player.attack_pressed()
+		player.attack_released()
+		return
+	if ai.state == "windup":
+		var left: float = MoveSet.MOVES[ai._attack].ai_windup - ai._state_t
+		if left < 0.08 and dist < 3.4 and player.sm.state == "free":
+			_dodge_side = -_dodge_side
+			Input.action_press("move_right" if _dodge_side > 0 else "move_left")
+			player.try_dash()
+			return
+	if dist > 2.3 and ai.state != "windup":
+		Input.action_press("move_forward")
+	else:
+		Input.action_release("move_forward")
+	if ai.state in ["stagger", "recover"] and dist < 2.6 and _frame % 8 == 0:
+		player._request_attack("combo")
+
+
 func _finish_duel(player: Player, ai: Duelist) -> void:
 	Input.action_release("block")
 	Input.action_release("move_forward")
@@ -158,13 +219,18 @@ func _finish_duel(player: Player, ai: Duelist) -> void:
 		_fail.append("AI never approached")
 	if _results.is_empty():
 		_fail.append("AI never attacked")
+	if _bot == "dodger":
+		print("COUNTERS ", _counters, " player states ", player.sm.counts)
+		_fail.clear()
+		if _counters == 0:
+			_fail.append("counter never happened")
 	if _bot == "masher":
 		_fail.clear()
 		if _results.is_empty():
 			_fail.append("AI never attacked")
 	elif ai_hp >= Duelist.MAX_HP:
 		_fail.append("could not damage AI")
-	if _bot != "masher" and not (_results.has("blocked") or _results.has("parried")):
+	if _bot == "good" and not (_results.has("blocked") or _results.has("parried")):
 		_fail.append("block/parry never worked")
 	if is_instance_valid(ai):
 		print("AI stats ", ai.stats)

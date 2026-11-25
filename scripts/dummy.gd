@@ -110,9 +110,11 @@ func _build() -> void:
 
 
 ## 칼에 맞았을 때 불린다. dir 은 맞은 방향 (공격자 → 허수아비).
-func take_hit(damage: int, dir: Vector3, heavy: bool, _attacker: Node3D = null) -> String:
+func take_hit(info: Dictionary, dir: Vector3, _attacker: Node3D = null) -> String:
 	if down:
 		return "none"
+	var damage: int = info.damage
+	var heavy: bool = info.react == "stagger"
 	hp = max(hp - damage, 0)
 	var local_dir := global_transform.basis.inverse() * dir
 	var push := (0.9 if heavy else 0.5)

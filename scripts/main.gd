@@ -37,6 +37,7 @@ func _ready() -> void:
 	player.hp_changed.connect(hud.set_player_hp)
 	player.took_damage.connect(hud.on_player_damaged)
 	player.combat_event.connect(hud.show_event)
+	player.counter_window.connect(hud.set_counter_window)
 
 	if mode == "duel":
 		_setup_duel()
@@ -75,6 +76,7 @@ func _setup_duel() -> void:
 	add_child(duelist)
 	duelist.target = player
 	player.attack_started.connect(duelist.on_target_attack)
+	player.charge_started.connect(duelist.on_target_charge)
 	duelist.hp_changed.connect(hud.set_enemy_hp)
 	duelist.combat_event.connect(hud.show_event)
 	duelist.died.connect(_on_round_end.bind(true))
