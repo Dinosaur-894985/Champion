@@ -5,6 +5,7 @@ signal menu_choice(choice: String)
 
 const FONT := preload("res://fonts/NanumGothic-Bold.ttf")
 const BUILD_EDITOR := preload("res://scripts/ui/build_editor.gd")
+const DIR_INDICATOR := preload("res://scripts/ui/dir_indicator.gd")
 
 ## '뒤로' 를 누르면 돌아갈 메뉴 (start / pause / win / lose)
 var menu_return := "start"
@@ -17,6 +18,7 @@ var _editor: Control
 
 var _root: Control
 var _crosshair: Control
+var _dir_ind: Control
 var _stamina_bar: ProgressBar
 var _hp_bar: ProgressBar
 var _hp_box: Control
@@ -104,6 +106,11 @@ func _ready() -> void:
 	_crosshair.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(_crosshair)
+	# 공격/막기 방향 표시 (조준점 둘레)
+	_dir_ind = DIR_INDICATOR.new()
+	_dir_ind.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_dir_ind.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_root.add_child(_dir_ind)
 
 	# 기력 막대 (화면 아래 가운데)
 	_stamina_bar = _make_bar(Color(0.95, 0.80, 0.35), Vector2(320, 10))
@@ -157,7 +164,7 @@ func _ready() -> void:
 
 	# 조작법 (왼쪽 위)
 	_help = Label.new()
-	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n벽을 보고 W + Space  벽 타고 오르기 (위에서 W 누른 채 올라섬)\n벽 옆을 달리다 Space  벽 달리기 (달리는 중 Space: 벽 차고 뛰기)\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\nE / R  특수 스킬 (오른쪽 아래 칸)\n오른쪽 클릭  막기 (맞기 직전에 누르면 튕겨내기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
+	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n벽을 보고 W + Space  벽 타고 오르기 (위에서 W 누른 채 올라섬)\n벽 옆을 달리다 Space  벽 달리기 (달리는 중 Space: 벽 차고 뛰기)\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n마우스를 살짝 위로/아래로 움직이며 클릭  내려베기 / 찌르기\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\nE / R  특수 스킬 (오른쪽 아래 칸)\n오른쪽 클릭  막기 — 막는 중 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\nF  잡아 던지기 (막는 상대에게. 휘두르는 상대에겐 끊긴다)\n휘두르기 전에 오른쪽 클릭/F/Shift  속임수 (공격 멈추기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
 	_help.add_theme_font_size_override("font_size", 15)
 	_help.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
 	_help.add_theme_constant_override("outline_size", 5)   # 밝은 경기장에서도 읽히게
@@ -444,9 +451,15 @@ func set_enemy(b: CharacterBuild) -> void:
 	set_enemy_stamina(b.max_stamina(), b.max_stamina())
 
 
+## 대결 상대: 방향 표시에 상대 공격/막기를 보여 준다
+func set_opponent(d: Duelist) -> void:
+	_dir_ind.opponent = d
+
+
 ## 내 캐릭터: 스킬 칸을 채운다
 func set_player(p: Player) -> void:
 	_player = p
+	_dir_ind.player = p
 	for i in _slots.size():
 		var slot: Dictionary = _slots[i]
 		if i >= p.build.skills.size():

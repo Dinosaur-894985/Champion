@@ -37,6 +37,13 @@ var reaction_time := 0.1
 var counter_chance := 0.65      # 막아낸 뒤 바로 반격
 var combo_chance := 0.55        # 연속 베기를 이어갈 확률
 var charge_chance := 0.18       # 거리가 벌어졌을 때 차지 베기
+var read_skill := 0.55          # 상대 공격 방향을 보고 맞게 막을 확률 (나머지는 버릇으로 짐작)
+var feint_chance := 0.3         # 공격 준비 중 방향을 바꾸거나 잡기로 바꾸는 속임수
+var grab_chance := 0.35         # 막고 있는 상대에게 다가가 잡기
+## 막기 방향 (AttackDir). 상대 공격과 방향이 같아야 막힌다.
+var guard_dir := AttackDir.SIDE
+## 상대 버릇 기억
+var mind := MindReader.new()
 var stats := {}   # 점검용 기록: 받은 공격 결과, 한 행동 횟수
 ## 쓸 수 있는 이동 기술 (플레이어와 같은 이름). 빌드의 '벽타기' 스킬로 켜진다.
 ## 벽을 못 타면 계단과 경사로로만 올라간다.
@@ -79,6 +86,9 @@ var _dodged_by_target := 0      # 플레이어에게 몇 번 피해졌나 → �
 var _windup_len := 0.5
 var _dir := Vector3.FORWARD
 var _dy := 0.0                  # 상대가 나보다 얼마나 높이 있나
+var _feint_checked := false     # 이번 공격 준비에서 속임수를 쓸지 이미 정했나
+var _thrown_t := 0.0            # 던져진 뒤 남은 '벽꽝' 시간
+var _grab_wait := 0.0           # 잡으려고 다가가는 시간
 
 # 길찾기
 var _direct := true             # 상대에게 곧장 갈 수 있나 (같은 층이고 막힌 게 없음)
@@ -105,12 +115,15 @@ var _sounds := {}
 func _ready() -> void:
 	if build == null:
 		build = CharacterBuild.preset("검객")
+	add_to_group("grabbable")
 	max_hp = build.max_hp()
 	hp = max_hp
 	max_stamina = build.max_stamina()
 	stamina = max_stamina
 	traits = {"wall_climb": build.has("wall")}
 	skills = SkillKit.new(self, build)
+	# 기술 능력치가 높을수록 상대 공격 방향을 잘 읽는다
+	read_skill = clampf(0.45 + 0.05 * (float(build.stats.tec) - 5.0), 0.25, 0.8)
 	collision_layer = 2
 	collision_mask = 1
 	var col := CollisionShape3D.new()
@@ -180,6 +193,7 @@ func _physics_process(delta: float) -> void:
 	_regen(delta)
 	_alert = maxf(_alert - delta, 0.0)
 	_iframes = maxf(_iframes - delta, 0.0)
+	_thrown_t = maxf(_thrown_t - delta, 0.0)
 	_hits_reset -= delta
 	if _hits_reset <= 0.0:
 		_hits_in_row = 0
@@ -193,6 +207,7 @@ func _physics_process(delta: float) -> void:
 		_dist = to_t.length()
 		_dir = to_t / maxf(_dist, 0.001)
 		_dy = target.global_position.y - global_position.y
+		mind.tick(delta, target.blocking)
 		_direct_t -= delta
 		if _direct_t <= 0.0:
 			_direct_t = 0.2
@@ -203,11 +218,15 @@ func _physics_process(delta: float) -> void:
 		var desired := atan2(-look.x, -look.z)
 		rotation.y = rotate_toward(rotation.y, desired, _turn_speed * delta)
 
-	_push = _push.lerp(Vector3.ZERO, clampf(delta * 6.0, 0, 1))
+	# 던져지는 중에는 밀린 힘이 천천히 줄어든다 (멀리 날아간다)
+	_push = _push.lerp(Vector3.ZERO, clampf(delta * (1.6 if _thrown_t > 0.0 else 6.0), 0, 1))
 	var mv := _move + _push
 	velocity.x = lerpf(velocity.x, mv.x, clampf(delta * 12.0, 0, 1))
 	velocity.z = lerpf(velocity.z, mv.z, clampf(delta * 12.0, 0, 1))
+	var pre_speed := Vector2(velocity.x, velocity.z).length()
 	move_and_slide()
+	if _thrown_t > 0.0 and is_on_wall() and pre_speed >= float(MoveSet.THROW.wall_slam_speed):
+		_wall_slam()
 
 
 func _regen(delta: float) -> void:
@@ -249,6 +268,9 @@ func _think() -> void:
 			return
 		sm.go("approach")
 		return
+	if _grab_wait > 0.0:
+		_think_t = 0.1   # 잡으러 다가가는 중
+		return
 	if _think_skills():
 		return
 	if target.sm.state == "iron":
@@ -263,6 +285,20 @@ func _think() -> void:
 		_strafe_dir = -1.0 if randf() < 0.5 else 1.0
 		_think_t = randf_range(0.5, 0.9)
 		return
+	# 상대가 막고 서 있으면: 다가가서 잡는다 (잡기는 막기를 이긴다)
+	if target.blocking and _dist < 3.4 and randf() < grab_chance + mind.grab_urge() * 0.6:
+		if _dist < float(MoveSet.MOVES.grab.reach) + 0.2:
+			_start_attack("grab")
+		else:
+			_grab_wait = 0.7
+			sm.go("approach")
+			_think_t = 0.12
+		return
+	# 상대가 잡기를 자주 쓰고 가까우면: 먼저 빠르게 찔러 끊는다 (공격은 잡기를 이긴다)
+	if _dist < 2.4 and randf() < mind.grab_rate * 1.5 and not target.attack_threat():
+		_combo_left = 0
+		_start_attack("thrust")
+		return
 	var r := randf()
 	# 거리가 좀 벌어졌으면 가끔 차지 베기로 돌진
 	if _dist > 2.6 and _dist < 4.6 and randf() < charge_chance * (1.0 if r < aggression else 0.3):
@@ -272,15 +308,17 @@ func _think() -> void:
 		sm.go("approach")
 		return
 	if r < aggression:
-		if randf() < 0.2:
+		if randf() < 0.15:
 			_start_attack("heavy")
 			_combo_left = 0
 		else:
-			# 연속 베기: 몇 번 이어 갈지 미리 정한다 (0~2번 더)
+			# 방향은 상대가 덜 막는 쪽, 지금 막고 있는 쪽은 피해서
+			var dir := mind.choose_dir(target.guard_dir if target.blocking else "")
 			_combo_left = 0
-			if randf() < combo_chance:
+			if dir == AttackDir.SIDE and randf() < combo_chance:
+				# 연속 베기: 몇 번 이어 갈지 미리 정한다 (0~2번 더)
 				_combo_left = 1 if randf() < 0.55 else 2
-			_start_attack("slash1")
+			_start_attack(_move_for_dir(dir))
 	elif r < aggression + 0.25:
 		sm.go("circle")
 		_strafe_dir = -1.0 if randf() < 0.5 else 1.0
@@ -288,6 +326,7 @@ func _think() -> void:
 	elif r < aggression + 0.33:
 		_dash_dir(-0.8, 0.6)
 	else:
+		guard_dir = mind.guess_dir()
 		_enter_block()
 
 
@@ -295,17 +334,65 @@ func _can_react() -> bool:
 	return active and not dead and state in ["idle", "approach", "circle", "recover"]
 
 
+## 상대 공격 방향 읽기: 실력(read_skill)만큼은 보고 맞히고, 나머지는 버릇으로 짐작한다
+func _read_dir(actual: String) -> String:
+	if actual == "":
+		return guard_dir
+	if randf() < read_skill:
+		return actual
+	return mind.guess_dir()
+
+
+func _set_guard(dir: String) -> void:
+	guard_dir = dir
+	if state == "block":
+		rig.set_pose(MoveSet.BODY_POSES[MoveSet.block_pose(guard_dir)], 22.0)
+
+
 ## 플레이어가 공격을 시작했을 때 (Main 이 연결해 준다)
 func on_target_attack(kind: String) -> void:
-	if not _can_react():
+	if not active or dead:
 		return
+	var dir: String = MoveSet.MOVES[kind].get("dir", "") if MoveSet.MOVES.has(kind) else ""
+	if kind == "grab":
+		mind.saw_grab()
+	else:
+		mind.saw_attack(dir)
 	if global_position.distance_to(target.global_position) > 3.6:
+		return
+	# 힘을 모으던 중에 상대가 먼저 휘두르면: 모으기를 끊고 옆으로 빠진다 (차지 끊고 대시)
+	if state == "windup" and _attack == "charge" and kind != "grab" and randf() < 0.55:
+		combat_event.emit("상대가 차지를 끊었다!", Color(1.0, 0.7, 0.4))
+		stats["charge_cancel"] = stats.get("charge_cancel", 0) + 1
+		_counter_ready = true
+		_dash_dir(-0.1, 1.0)
+		return
+	if state == "block":
+		# 막는 중: 방향을 다시 읽고 맞춘다
+		await get_tree().create_timer(reaction_time, false).timeout
+		if state != "block":
+			return
+		if kind == "grab":
+			# 잡기다! 막고 있으면 잡힌다 → 빠져나간다
+			if randf() < 0.25 + read_skill * 0.5:
+				_dash_dir(-1.0, 0.4)
+			return
+		_set_guard(_read_dir(dir))
+		return
+	if not _can_react():
 		return
 	await get_tree().create_timer(reaction_time, false).timeout
 	if not _can_react():
 		return
+	if kind == "grab":
+		# 잡기는 막으면 안 된다: 뒤로 빠지거나, 가까우면 먼저 찔러 끊는다
+		if randf() < 0.3 + read_skill * 0.4:
+			_dash_dir(-1.0, 0.3)
+		return
+	guard_dir = _read_dir(dir)
 	var big := kind in ["heavy", "charge"]
-	var block := block_chance + (0.25 if _alert > 0.0 else 0.0)
+	# 상대가 자주 속이면 서둘러 막지 않는다
+	var block := (block_chance + (0.25 if _alert > 0.0 else 0.0)) * (1.0 - mind.feint_rate * 0.6)
 	var dodge := dodge_chance
 	if big:
 		# 막기를 깨는 공격은 막기보다 피하는 편이 낫다
@@ -325,6 +412,16 @@ func on_target_attack(kind: String) -> void:
 		_dash_dir(-0.2, 1.0)   # 옆으로 피하기
 	elif r < block + dodge + 0.1:
 		_dash_dir(-1.0, 0.4)
+
+
+## 플레이어가 공격을 멈췄을 때 (속임수). 자주 속이면 다음엔 덜 서둘러 막는다.
+func on_target_feint() -> void:
+	mind.saw_feint()
+	stats["saw_feint"] = stats.get("saw_feint", 0) + 1
+	# 속임수에 막기만 하고 서 있으면 잡힌다: 가끔 바로 막기를 풀고 반격
+	if state == "block" and _dist < 2.6 and randf() < 0.4 + mind.feint_rate:
+		_combo_left = 0
+		_start_attack("thrust")
 
 
 ## 플레이어가 힘을 모으기 시작했을 때: 파고들어 끊거나, 물러난다
@@ -356,6 +453,12 @@ func _back_to_neutral() -> void:
 	rig.set_pose(MoveSet.BODY_POSES.guard, 10.0)
 	rig.glow(rig.blade_mat.emission, 0.0)
 	rig.tremble = 0.0
+	rig.reach = 0.0
+	# 경직이 풀렸는데 상대가 이미 휘두르고 있으면: 바로 방향을 읽고 막는다 (연타에 갇히지 않게)
+	if active and target and target.attack_threat() and _dist < 3.2 \
+			and randf() < block_chance + (0.3 if _alert > 0.0 else 0.1):
+		guard_dir = _read_dir(target.attack_dir())
+		_enter_block()
 
 
 # ---------------- 행동 상태 ----------------
@@ -371,6 +474,14 @@ func _neutral_update(delta: float) -> void:
 		return
 	_path.clear()
 	var side := Vector3(-_dir.z, 0, _dir.x)
+	if _grab_wait > 0.0:
+		# 잡으려고 바짝 붙는다
+		_grab_wait -= delta
+		_move = _dir * _speed() * 1.2
+		if _dist < float(MoveSet.MOVES.grab.reach) and target.blocking:
+			_grab_wait = 0.0
+			_start_attack("grab")
+		return
 	if state == "approach":
 		_move = _dir * _speed() if _dist > 2.0 else Vector3.ZERO
 	else:
@@ -385,8 +496,43 @@ func _start_attack(kind: String) -> void:
 		_back_to_neutral()
 		return
 	_attack = kind
+	_grab_wait = 0.0
+	_feint_checked = false
 	stats["move_" + kind] = stats.get("move_" + kind, 0) + 1
 	sm.go("windup")
+
+
+## 방향에 맞는 공격 동작
+static func _move_for_dir(dir: String) -> String:
+	match dir:
+		AttackDir.HIGH:
+			return "overhead"
+		AttackDir.MID:
+			return "thrust"
+	return "slash1"
+
+
+## 지금 준비 중인 공격의 방향 (화면 표시와 점검용). 잡기는 "grab".
+func attack_dir() -> String:
+	if state not in ["windup", "strike"]:
+		return ""
+	if _attack == "grab":
+		return "grab"
+	return MoveSet.MOVES[_attack].get("dir", "")
+
+
+## 공격 준비가 얼마나 됐나 (0~1, 휘두르는 중이면 1)
+func windup_progress() -> float:
+	if state == "strike":
+		return 1.0
+	if state != "windup":
+		return 0.0
+	return clampf(_state_t / maxf(_windup_len, 0.01), 0.0, 1.0)
+
+
+## 잡기를 끊을 수 있는 공격 중인가
+func attack_threat() -> bool:
+	return state in ["windup", "strike"] and _attack != "grab"
 
 
 func _windup_enter(_d: Dictionary) -> void:
@@ -401,6 +547,9 @@ func _windup_enter(_d: Dictionary) -> void:
 		col = Color(1.0, 0.15, 0.1)
 	if _attack == "counter":
 		col = Color(0.4, 0.8, 1.0)
+	if _attack == "grab":
+		col = Color(0.8, 0.35, 1.0)   # 보랏빛 = 잡기: 막지 말고 때리거나 피하라
+		rig.reach = 1.0
 	rig.glow(col, 0.0)
 	_play("warn_heavy" if data.warn == "heavy" else "warn_light", -3.0)
 
@@ -416,8 +565,63 @@ func _windup_update(_delta: float) -> void:
 		_move = _dir * 1.4 if _dist > 2.2 else Vector3.ZERO
 	else:
 		_move = _dir * 0.6 if _dist > 1.6 else Vector3.ZERO
+	# 속임수: 준비가 반쯤 됐을 때 한 번 정한다
+	if not _feint_checked and _state_t >= _windup_len * 0.45:
+		_feint_checked = true
+		if _try_feint():
+			return
 	if _state_t >= _windup_len:
 		sm.go("strike")
+
+
+## 상대가 내 공격 방향에 맞춰 막고 있으면: 방향을 바꾸거나, 잡기로 바꾸거나, 멈춘다.
+## 잘 막는 상대일수록 자주 쓴다. 바꾼 뒤에도 보고 막을 시간은 남겨 둔다.
+func _try_feint() -> bool:
+	if _attack in ["counter", "grab"]:
+		return false
+	var chance := feint_chance * (0.4 + mind.feint_urge())
+	var reading := target.blocking and AttackDir.blocks(target.guard_dir, attack_dir())
+	if reading:
+		chance += 0.25
+	if randf() >= chance:
+		return false
+	stats["feint"] = stats.get("feint", 0) + 1
+	var r := randf()
+	if target.blocking and _dist < float(MoveSet.MOVES.grab.reach) + 0.6 and r < 0.5:
+		# 휘두르는 척하다 잡기
+		stats["feint_grab"] = stats.get("feint_grab", 0) + 1
+		_start_attack("grab")
+		_feint_checked = true
+		return true
+	if r < 0.85 and _attack != "charge":
+		# 방향 바꾸기: 다른 방향으로 다시 준비한다 (조금 짧게)
+		var old := attack_dir()
+		var dir := old
+		for i in 4:
+			dir = mind.choose_dir(target.guard_dir if target.blocking else old)
+			if dir != old:
+				break
+		if dir == old:
+			return false
+		stats["feint_switch"] = stats.get("feint_switch", 0) + 1
+		_combo_left = 0
+		_attack = _move_for_dir(dir)
+		_feint_checked = true
+		var data: Dictionary = MoveSet.MOVES[_attack]
+		_windup_len = maxf(data.ai_windup * _atk_mult() * 0.75, 0.32)
+		sm.time = 0.0
+		rig.set_pose(data.body.windup, 3.0 / _windup_len)
+		_play("warn_light", -5.0)
+		return true
+	# 멈추고 물러난다 (헛막기를 유도)
+	stats["feint_stop"] = stats.get("feint_stop", 0) + 1
+	if _attack == "charge":
+		# 차지를 끊고 옆으로 대시
+		_counter_ready = false
+		_dash_dir(0.3, 1.0)
+	else:
+		_back_to_neutral()
+	return true
 
 
 func _strike_enter(_d: Dictionary) -> void:
@@ -432,7 +636,10 @@ func _strike_update(_delta: float) -> void:
 	_turn_speed = 0.5
 	_move = -global_transform.basis.z * float(data.lunge) if _dist > 1.3 else Vector3.ZERO
 	if not _hit_done:
-		_try_hit(data)
+		if _attack == "grab":
+			_try_grab(data)
+		else:
+			_try_hit(data)
 	if _state_t >= data.active:
 		if not _hit_done:
 			# 빗나갔다 — 막 대시로 피한 거라면 플레이어에게 반격 기회
@@ -464,7 +671,7 @@ func _enter_block() -> void:
 
 
 func _block_enter(_d: Dictionary) -> void:
-	rig.set_pose(MoveSet.BODY_POSES.block, 22.0)
+	rig.set_pose(MoveSet.BODY_POSES[MoveSet.block_pose(guard_dir)], 22.0)
 	rig.glow(rig.blade_mat.emission, 0.0)
 
 
@@ -512,6 +719,8 @@ func _dash_update(_delta: float) -> void:
 func _stagger_enter(d: Dictionary) -> void:
 	_stagger_time = d.time
 	_combo_left = 0
+	_grab_wait = 0.0
+	rig.reach = 0.0
 	rig.tremble = 0.0
 	rig.glow(rig.blade_mat.emission, 0.0)
 	if d.get("big", true):
@@ -644,8 +853,11 @@ func _try_hit(data: Dictionary) -> void:
 	var info := {
 		"move": _attack, "damage": int(round(float(data.damage) * build.damage_mult())) + randi_range(-2, 2),
 		"react": data.react, "guard": data.get("ai_guard", data.guard), "pressure": build.guard_pressure(),
+		"dir": data.get("dir", ""),
 	}
 	var result := target.receive_attack(info, self)
+	mind.my_attack_result(info.dir, result)
+	stats["res_" + result] = stats.get("res_" + result, 0) + 1
 	match result:
 		"parried":
 			_stagger(0.75)
@@ -655,9 +867,121 @@ func _try_hit(data: Dictionary) -> void:
 			_combo_left = 0
 		"dodged":
 			_dodged_by_target += 1
-		"guard_broken", "hit":
+		"guard_broken", "hit", "wrong_guard":
 			Fx.impact(get_parent(), target.global_position + Vector3(0, 1.3, 0), _dir + Vector3.UP * 0.3,
 					Color(0.75, 0.1, 0.08), 14)
+
+
+# ---------------- 잡기 ----------------
+
+func _try_grab(data: Dictionary) -> void:
+	if _dist > float(data.reach) + 0.2 or absf(_dy) > 1.2:
+		return
+	var facing := -global_transform.basis.z
+	facing.y = 0
+	if facing.normalized().dot(_dir) < 0.4:
+		return
+	_hit_done = true
+	rig.reach = 0.0
+	var info := {"damage": int(round(float(data.damage) * build.damage_mult())), "react": "thrown",
+			"throw": _throw_dir() * float(data.throw_speed) + Vector3.UP * float(data.throw_up)}
+	var result := target.take_grab(info, self)
+	stats["grab_" + result] = stats.get("grab_" + result, 0) + 1
+	match result:
+		"thrown":
+			_play("hit_heavy")
+			combat_event.emit("상대가 잡아 던졌다!", Color(1.0, 0.45, 0.8))
+		"beaten", "blocked":
+			_stagger(MoveSet.REACTIONS.grab_fail.time)
+			_push = -_dir * float(MoveSet.REACTIONS.grab_fail.push)
+		"clash":
+			_play("clang", -2.0)
+			_stagger(MoveSet.REACTIONS.recoil.time, false)
+			_push = -_dir * 3.0
+
+
+## 던질 방향: 상대 뒤쪽 가운데 + 양옆으로 비스듬히 중에서, 벽에 부딪히거나 낭떠러지로 떨어지는 쪽
+func _throw_dir() -> Vector3:
+	var best := _dir
+	var best_score := 0.0
+	var space := get_world_3d().direct_space_state
+	var from := target.global_position + Vector3.UP * 1.0
+	_ray.exclude = [get_rid(), target.get_rid()]
+	for deg in [0.0, -40.0, 40.0, -75.0, 75.0]:
+		var c := _dir.rotated(Vector3.UP, deg_to_rad(deg))
+		var score := 0.0
+		_ray.from = from
+		_ray.to = from + c * 3.2
+		var hit := space.intersect_ray(_ray)
+		if not hit.is_empty() and absf((hit.normal as Vector3).y) < 0.4:
+			score = 2.0 + (3.2 - from.distance_to(hit.position))   # 벽꽝
+		else:
+			# 2.5m 앞에 발 디딜 곳이 없으면 낭떠러지
+			_ray.from = from + c * 2.5
+			_ray.to = _ray.from + Vector3.DOWN * 3.0
+			if space.intersect_ray(_ray).is_empty():
+				score = 4.0
+		score -= absf(deg) / 150.0
+		if score > best_score:
+			best_score = score
+			best = c
+	return best
+
+
+## 상대가 나를 잡았을 때. 결과: "thrown", "beaten", "clash", "dodged", "blocked"
+func take_grab(info: Dictionary, attacker: Node3D) -> String:
+	var r := _take_grab(info, attacker)
+	stats["got_grab_" + r] = stats.get("got_grab_" + r, 0) + 1
+	return r
+
+
+func _take_grab(info: Dictionary, attacker: Node3D) -> String:
+	if dead:
+		return "none"
+	if _iframes > 0.0:
+		_counter_ready = true
+		combat_event.emit("상대가 잡기를 피했다!", Color(1.0, 0.7, 0.4))
+		return "dodged"
+	if state == "iron":
+		combat_event.emit("철벽은 잡히지 않는다", Color(1.0, 0.85, 0.4))
+		return "blocked"
+	if state == "windup" and _attack == "grab":
+		_stagger(MoveSet.REACTIONS.recoil.time, false)
+		_push = (global_position - attacker.global_position).normalized() * 3.0
+		return "clash"
+	if attack_threat():
+		combat_event.emit("상대가 휘둘러 잡기를 끊었다!", Color(1.0, 0.55, 0.35))
+		return "beaten"
+	var dir := global_position - attacker.global_position
+	dir.y = 0
+	dir = dir.normalized()
+	_apply_damage(int(info.damage), dir, true)
+	if not dead:
+		_stagger(MoveSet.REACTIONS.thrown.time)
+		apply_throw(info.throw)
+	return "thrown"
+
+
+## 던져진다: 날아가는 동안 벽에 세게 부딪히면 '벽꽝'
+func apply_throw(vec: Vector3) -> void:
+	_thrown_t = float(MoveSet.THROW.slam_time)
+	if has_method("apply_knockback"):
+		call("apply_knockback", vec)
+	else:
+		_push = Vector3(vec.x, 0, vec.z)
+		velocity = vec
+
+
+func _wall_slam() -> void:
+	_thrown_t = 0.0
+	_push = Vector3.ZERO
+	var dmg := int(MoveSet.THROW.wall_slam_damage)
+	combat_event.emit("벽꽝!", Color(1.0, 0.6, 0.3))
+	stats["wall_slam"] = stats.get("wall_slam", 0) + 1
+	var n := get_wall_normal()
+	_apply_damage(dmg, -n, true)
+	if not dead:
+		_stagger(MoveSet.REACTIONS.stagger.time)
 
 
 # ---------------- 맞을 때 ----------------
@@ -689,6 +1013,15 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 	var facing := -global_transform.basis.z
 	facing.y = 0
 	var facing_attacker := facing.normalized().dot(-dir) > 0.2
+	if state == "block" and facing_attacker and info.guard != "unblockable" \
+			and not AttackDir.blocks(guard_dir, info.get("dir", "")):
+		# 막는 방향이 틀렸다: 빈 곳을 베였다
+		combat_event.emit("빈 곳을 베었다!", Color(1.0, 0.85, 0.4))
+		stats["wrong_guard"] = stats.get("wrong_guard", 0) + 1
+		_apply_damage(damage, dir, big)
+		if not dead:
+			_stagger(MoveSet.REACTIONS.stagger.time if big else MoveSet.REACTIONS.flinch.time, big)
+		return "hit"
 	if state == "block" and facing_attacker and info.guard != "unblockable":
 		var parry := parry_chance * (1.0 + 0.12 * (float(build.stats.tec) - 5.0))
 		if _state_t < 0.3 and randf() < parry:

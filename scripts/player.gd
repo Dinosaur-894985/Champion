@@ -16,6 +16,8 @@ signal took_damage(amount: int)
 signal combat_event(text: String, color: Color)
 signal died
 signal attack_received(result: String)
+signal feinted                  # 공격을 준비하다 멈췄다 (속임수)
+signal guard_changed(dir: String)
 
 # --- 이동 ---
 const WALK_SPEED := 5.0
@@ -57,6 +59,11 @@ const BLOCK_SPEED_MULT := 0.45
 const PARRY_WINDOW := 0.2      # 막기를 누른 직후 이 시간 안에 맞으면 튕겨내기
 const BLOCK_COST := {"flinch": 14.0, "stagger": 30.0}
 
+# --- 수싸움 ---
+const BLOCK_LOOK_SENS := 0.35  # 막는 동안은 마우스가 화면보다 막기 방향을 바꾸는 데 쓰인다
+const LOCK_TURN := 7.0         # 막는 동안 상대 쪽으로 저절로 돌아보는 빠르기
+const LOCK_RANGE := 9.0
+
 ## 내 캐릭터 (능력치, 특수 스킬). 씬에 넣기 전에 정해 둔다. 없으면 기본 캐릭터.
 var build: CharacterBuild
 ## 이 캐릭터가 쓸 수 있는 이동 기술 (MoveSet.TRAVERSAL). 빌드의 '벽타기' 스킬로 켜진다.
@@ -71,6 +78,10 @@ var controls_enabled := true
 var dead := false
 var blocking: bool:
 	get: return sm.state == "block"
+## 막기 방향 (AttackDir: "high" 위 / "side" 옆 / "mid" 찌르기). 막을 때 마우스를 위/옆/아래로 움직여 바꾼다.
+var guard_dir := AttackDir.SIDE
+## 막는 동안 저절로 바라볼 상대 (대결에서 Game 이 정해 준다)
+var opponent: Node3D
 
 ## 행동 상태: free, block, attack, charge, dash, stagger, climb(벽 오르기), wallrun(벽 달리기)
 var sm := StateMachine.new()
@@ -121,6 +132,12 @@ var _grap_point := Vector3.ZERO
 var _grap_body: Node3D = null
 var _rope: MeshInstance3D
 
+# 수싸움
+var _flick := AttackDir.Flick.new()
+var _guard_t := 99.0           # 막기 방향을 정한 뒤 지난 시간 (튕겨내기 판정)
+var _thrown_t := 0.0           # 던져진 뒤 남은 '벽꽝' 시간
+var _pre_speed := 0.0
+
 # 경직
 var _stun_time := 0.0
 var _stun_kind := ""
@@ -147,6 +164,7 @@ var _hit_query := PhysicsShapeQueryParameters3D.new()
 func _ready() -> void:
 	if build == null:
 		build = CharacterBuild.new()
+	add_to_group("grabbable")
 	max_hp = build.max_hp()
 	hp = max_hp
 	max_stamina = build.max_stamina()
@@ -272,20 +290,31 @@ func _unhandled_input(event: InputEvent) -> void:
 		# 브라우저에서 마우스를 잠근 직전/직후 한 번 크게 튀는 값이 들어올 수 있어 무시한다
 		if event.relative.length() > 300.0:
 			return
+		_flick.add(event.relative)
 		var sens := MOUSE_SENS * (0.6 if sm.state == "charge" else 1.0)
+		if blocking:
+			sens = MOUSE_SENS * BLOCK_LOOK_SENS
+			var d := _flick.dir()
+			if d != "" and d != guard_dir:
+				set_guard(d)
+				_flick.clear()
 		rotate_y(-event.relative.x * sens)
 		head.rotate_x(-event.relative.y * sens)
 		head.rotation.x = clampf(head.rotation.x, deg_to_rad(-88), deg_to_rad(88))
 	elif not controls_enabled:
 		return
 	elif event.is_action_pressed("attack"):
-		attack_pressed()
+		attack_pressed(_flick.dir(), _flick.side_sign())
 	elif event.is_action_released("attack"):
 		attack_released()
 	elif event.is_action_pressed("heavy_attack"):
 		_request_attack("heavy")
 	elif event.is_action_pressed("sprint"):
 		try_dash()
+	elif event.is_action_pressed("grab"):
+		try_grab()
+	elif event.is_action_pressed("block"):
+		block_pressed(_flick.dir())
 	elif event.is_action_pressed("skill1"):
 		use_skill_slot(0)
 	elif event.is_action_pressed("skill2"):
@@ -315,7 +344,11 @@ func _physics_process(delta: float) -> void:
 	# ---- 위 몸: 지금 행동 ----
 	if sm.state == "free" and _can_act() and Input.is_action_pressed("block"):
 		sm.go("block")
+	_guard_t += delta
+	_thrown_t = maxf(_thrown_t - delta, 0.0)
 	sm.tick(delta)
+	if blocking:
+		_soft_lock(delta)
 
 	# ---- 아래 몸: 이동 ----
 	_jump_buffer -= delta
@@ -346,10 +379,13 @@ func _physics_process(delta: float) -> void:
 
 	if not sm.is_in(["dash", "climb", "wallrun", "grapple"]):
 		var accel := GROUND_ACCEL if on_floor else AIR_ACCEL
+		if _thrown_t > 0.0:
+			accel = 1.5   # 던져지는 중에는 거의 멈추지 못하고 날아간다
 		var target := dir * speed
 		velocity.x = lerpf(velocity.x, target.x, clampf(accel * delta, 0, 1))
 		velocity.z = lerpf(velocity.z, target.z, clampf(accel * delta, 0, 1))
 	_fall_speed = velocity.y
+	_pre_speed = Vector2(velocity.x, velocity.z).length()
 	move_and_slide()
 	_after_move(on_floor, input)
 
@@ -385,6 +421,8 @@ func _after_move(was_on_floor: bool, input: Vector2) -> void:
 		_wall_n = n.normalized()
 		var col := c.get_collider()
 		_wall_climbable = col != null and not (col as Object).has_meta("no_climb")
+	if _wall_contact and _thrown_t > 0.0 and _pre_speed >= float(MoveSet.THROW.wall_slam_speed):
+		_wall_slam()
 	var on_floor := is_on_floor()
 	if on_floor:
 		if not was_on_floor and _fall_speed < -7.0:
@@ -585,7 +623,63 @@ func _tween_pose(tw: Tween, pose: Array, time: float, trans := Tween.TRANS_SINE,
 # ---------------- 막기 ----------------
 
 func _block_enter(_d: Dictionary) -> void:
-	_pose_to(MoveSet.FP_POSES.block, 0.08)
+	_guard_t = 0.0
+	_pose_to(MoveSet.FP_POSES[MoveSet.block_pose(guard_dir)], 0.08)
+
+
+## 오른쪽 클릭을 눌렀을 때: 마우스를 움직이던 쪽으로 막는다.
+## 공격을 준비하던 중이면 그 공격을 멈춘다 (속임수: 휘두르는 척하다 막기).
+func block_pressed(dir: String = "") -> void:
+	if not _can_act():
+		return
+	if dir != "":
+		set_guard(dir)
+	if _try_feint():
+		sm.go("block")
+
+
+## 막기 방향을 바꾼다. 막는 중이면 칼 자세도 바로 바뀌고, 튕겨내기 시간이 다시 시작된다.
+func set_guard(dir: String) -> void:
+	if not dir in AttackDir.ALL:
+		return
+	var changed_dir := dir != guard_dir
+	guard_dir = dir
+	if blocking:
+		_guard_t = 0.0
+		_pose_to(MoveSet.FP_POSES[MoveSet.block_pose(guard_dir)], 0.06)
+		if changed_dir:
+			_play("dash", 1.8, -16.0)
+	if changed_dir:
+		guard_changed.emit(dir)
+
+
+## 막는 동안 상대 쪽으로 저절로 돌아본다 (마우스는 막기 방향을 바꾸는 데 쓰라고)
+func _soft_lock(delta: float) -> void:
+	if opponent == null or not is_instance_valid(opponent):
+		return
+	var to := opponent.global_position - global_position
+	var flat := Vector3(to.x, 0, to.z)
+	if flat.length() > LOCK_RANGE or flat.length() < 0.3:
+		return
+	var yaw := atan2(-flat.x, -flat.z)
+	rotation.y = rotate_toward(rotation.y, yaw, LOCK_TURN * delta)
+	var pitch := atan2(to.y + 1.2 - head.position.y, flat.length())
+	head.rotation.x = rotate_toward(head.rotation.x, clampf(pitch, -0.8, 0.8), LOCK_TURN * 0.5 * delta)
+
+
+## 공격 준비(휘두르기 전)나 힘 모으기를 멈춘다. 멈췄으면 true. 기력이 조금 든다.
+func _try_feint() -> bool:
+	var winding := sm.state == "attack" and _attack_phase == "windup" and _move not in ["counter", "grab"]
+	if not winding and sm.state != "charge":
+		return sm.state in ["free", "block"]
+	_use_stamina(float(MoveSet.THROW.feint_cost))
+	_queued = ""
+	_press_owner = ""
+	sm.go("free")
+	_pose_to(MoveSet.FP_POSES.rest, 0.08)
+	combat_event.emit("속임수", Color(0.85, 0.75, 1.0))
+	feinted.emit()
+	return true
 
 
 func _block_update(_delta: float) -> void:
@@ -601,14 +695,18 @@ func try_dash() -> void:
 		return
 	if not sm.is_in(["free", "block", "attack", "charge"]):
 		return
-	# 공격은 회복 동작 중일 때만 대시로 끊을 수 있다
-	if sm.state == "attack" and _attack_phase != "recover":
+	# 공격은 준비 중(속임수)이거나 회복 동작 중일 때만 대시로 끊을 수 있다. 휘두르는 순간은 안 된다.
+	if sm.state == "attack" and _attack_phase == "active":
+		return
+	if sm.state == "attack" and _attack_phase == "windup" and _move in ["counter", "grab"]:
 		return
 	if stamina < DASH_COST * 0.5:
 		return
 	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	if input == Vector2.ZERO:
 		input = Vector2(0, 1)   # 방향키 없이 누르면 뒤로 물러난다
+	if (sm.state == "attack" and _attack_phase == "windup") or sm.state == "charge":
+		_try_feint()   # 휘두르는 척하다 / 힘 모으다 대시로 빠지기
 	sm.go("dash", {"input": input.normalized()})
 
 
@@ -665,8 +763,12 @@ func counter_ready() -> bool:
 # ---------------- 공격 입력 ----------------
 
 ## 왼쪽 클릭을 눌렀을 때: 반격 기회면 반격, 아니면 연속 베기 (누르고 있으면 차지)
-func attack_pressed() -> void:
+## dir: 마우스를 움직이던 방향 — "high" 위에서 내려베기, "mid" 찌르기, "side"/"" 옆 베기(연속 베기)
+## side: 옆으로 움직였다면 어느 쪽인지 (-1 왼쪽에서, +1 오른쪽에서)
+func attack_pressed(dir: String = "", side: float = 0.0) -> void:
 	_press_t = 0.0
+	_aim_dir = dir
+	_aim_side = side
 	if _counter_t > 0.0 and sm.is_in(["free", "block", "dash", "attack"]) and _move != "counter":
 		_press_owner = ""
 		_counter_t = 0.0
@@ -674,6 +776,26 @@ func attack_pressed() -> void:
 		sm.go("attack", {"move": "counter"})
 		return
 	_request_attack("combo")
+
+
+var _aim_dir := ""
+var _aim_side := 0.0
+
+
+## 클릭 방향에 맞는 동작. prev: 지금 쓰고 있는 동작 (연속 베기를 이어간다)
+func _combo_move(prev: String) -> String:
+	match _aim_dir:
+		AttackDir.HIGH:
+			return "overhead"
+		AttackDir.MID:
+			return "thrust"
+	if prev != "":
+		var nxt: String = MoveSet.MOVES[prev].next
+		if nxt != "":
+			return nxt
+	if _aim_side > 0.0:
+		return "slash2"
+	return "slash1"
 
 
 func attack_released() -> void:
@@ -688,9 +810,9 @@ func _request_attack(kind: String) -> void:
 		return
 	match sm.state:
 		"free", "block":
-			_start_attack("slash1" if kind in ["combo", "light"] else kind)
+			_start_attack(_combo_move("") if kind in ["combo", "light"] else kind)
 		"dash":
-			var q := "slash1" if kind in ["combo", "light"] else kind
+			var q := _combo_move("") if kind in ["combo", "light"] else kind
 			if sm.time >= DASH_TIME * DASH_ATTACK_CANCEL:
 				_start_attack(q)
 			else:
@@ -699,8 +821,7 @@ func _request_attack(kind: String) -> void:
 			if _move == "charge" or (_attack_phase == "windup" and _queued != ""):
 				return
 			if kind in ["combo", "light"]:
-				var nxt: String = MoveSet.MOVES[_move].next
-				_queued = nxt if nxt != "" else "slash1"
+				_queued = _combo_move(_move)
 			else:
 				_queued = kind
 
@@ -709,7 +830,7 @@ func _start_attack(move_name: String) -> void:
 	var data: Dictionary = MoveSet.MOVES[move_name]
 	if stamina < data.cost * 0.5:
 		return
-	if move_name.begins_with("slash") and _press_t >= 0.0:
+	if move_name in ["slash1", "slash2", "slash3"] and _press_t >= 0.0:
 		_press_owner = move_name
 	else:
 		_press_owner = ""
@@ -727,7 +848,7 @@ func _attack_enter(d: Dictionary) -> void:
 	_queued = ""
 	_already_hit.clear()
 	_hit_info = {"move": _move, "react": data.react, "guard": data.guard, "damage": data.damage,
-			"pressure": build.guard_pressure()}
+			"pressure": build.guard_pressure(), "dir": data.get("dir", "")}
 	if _move == "charge":
 		_hit_info.damage = MoveSet.charge_damage(_charge_level)
 		if not _charge_full:
@@ -758,7 +879,10 @@ func _attack_update(delta: float) -> void:
 				return
 			_enter_active(data)
 		"active":
-			_check_hits(data)
+			if _move == "grab":
+				_check_grab(data)
+			else:
+				_check_hits(data)
 			if sm.state == "attack" and _attack_timer <= 0.0:
 				_attack_phase = "recover"
 				_attack_timer = data.recover * _atk_mult()
@@ -783,7 +907,7 @@ func _atk_mult() -> float:
 func _enter_active(data: Dictionary) -> void:
 	_attack_phase = "active"
 	_attack_timer = data.active
-	_play("heavy" if _move in ["heavy", "charge", "slash3"] else "light", 1.0, -6.0)
+	_play("heavy" if _move in ["heavy", "charge", "slash3"] else ("dash" if _move == "grab" else "light"), 1.0, -6.0)
 	var fwd := -transform.basis.z
 	velocity += fwd * float(data.lunge)
 	_kill_weapon_tween()
@@ -798,6 +922,165 @@ func _tween_back(time: float) -> void:
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
 	_tween_pose(_weapon_tween, MoveSet.FP_POSES.rest, time, Tween.TRANS_SINE, Tween.EASE_IN_OUT)
+
+
+# ---------------- 잡기 (F) ----------------
+# 가위바위보: 공격 > 잡기 > 막기 > 공격.
+# 막고 있는 상대는 잡아서 던진다. 휘두르는 상대를 잡으려 하면 끊긴다. 빗나가면 빈틈이 크다.
+
+func try_grab() -> void:
+	if not _can_act():
+		return
+	if sm.state == "attack" and _move == "grab":
+		return
+	var winding := (sm.state == "attack" and _attack_phase == "windup") or sm.state == "charge"
+	if winding:
+		_try_feint()   # 휘두르는 척하다 잡기
+	elif not sm.is_in(["free", "block"]):
+		return
+	if stamina < float(MoveSet.MOVES.grab.cost) * 0.5:
+		return
+	_press_owner = ""
+	sm.go("attack", {"move": "grab"})
+
+
+func is_grabbing() -> bool:
+	return sm.state == "attack" and _move == "grab"
+
+
+## 잡기를 끊을 수 있는 공격 중인가 (준비하거나 휘두르는 중, 힘 모으는 중)
+func attack_threat() -> bool:
+	if sm.state == "charge":
+		return true
+	return sm.state == "attack" and _move != "grab" and _attack_phase in ["windup", "active"]
+
+
+## 지금 하고 있는 공격의 방향 ("" = 공격 중 아님)
+func attack_dir() -> String:
+	if sm.state == "charge":
+		return MoveSet.MOVES.charge.dir
+	if sm.state == "attack" and _move != "":
+		return MoveSet.MOVES[_move].get("dir", "")
+	return ""
+
+
+## 던질 방향: 보는 쪽. A/D 를 누르고 있으면 그쪽으로 비스듬히.
+func _throw_dir() -> Vector3:
+	var fwd := -transform.basis.z
+	fwd.y = 0
+	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back") if _can_act() else Vector2.ZERO
+	var right := transform.basis.x
+	right.y = 0
+	return (fwd.normalized() + right.normalized() * input.x * 0.9).normalized()
+
+
+func _check_grab(data: Dictionary) -> void:
+	if _already_hit.has("grab"):
+		return
+	var fwd := -transform.basis.z
+	fwd.y = 0
+	fwd = fwd.normalized()
+	var best: Node3D = null
+	var best_d := float(data.reach) + 0.4
+	for n in get_tree().get_nodes_in_group("grabbable"):
+		var b := n as Node3D
+		if b == null or b == self:
+			continue
+		var to := b.global_position - global_position
+		if absf(to.y) > 1.2:
+			continue
+		to.y = 0
+		var d := to.length()
+		if d < best_d and (d < 0.5 or fwd.dot(to / d) > 0.5):
+			best = b
+			best_d = d
+	if best == null:
+		return
+	_already_hit["grab"] = true
+	var info := {"damage": int(round(float(data.damage) * build.damage_mult())), "react": "thrown",
+			"throw": _throw_dir() * float(data.throw_speed) + Vector3.UP * float(data.throw_up)}
+	var result: String = best.take_grab(info, self)
+	_grab_result(result, best)
+
+
+## 잡기 결과에 따라 내 몸이 어떻게 되는지
+func _grab_result(result: String, target: Node3D) -> void:
+	var to := target.global_position - global_position
+	to.y = 0
+	match result:
+		"thrown":
+			_play("heavy", 0.7, -2.0)
+			combat_event.emit("잡아 던지기!", Color(0.95, 0.6, 1.0))
+			_shake = 0.6
+			_kick.x += deg_to_rad(4.0)
+			_on_hit_landed(true)
+		"beaten":
+			# 상대가 휘두르는 중이었다: 잡기가 끊긴다
+			combat_event.emit("잡기가 끊겼다!", Color(1.0, 0.45, 0.35))
+			_react("grab_fail", to)
+		"clash":
+			# 서로 잡으려다 맞잡았다: 둘 다 튕겨 난다
+			combat_event.emit("맞잡기!", Color(0.9, 0.9, 0.9))
+			_play("clang", 0.7)
+			_react("recoil", to)
+		"blocked":
+			combat_event.emit("잡히지 않는다", Color(0.85, 0.85, 0.85))
+			_react("grab_fail", to)
+		"dodged":
+			combat_event.emit("피했다!", Color(1.0, 0.7, 0.4))
+
+
+## 상대가 나를 잡았을 때. 결과: "thrown" 던져짐, "beaten" 내 공격이 잡기를 끊음, "clash" 맞잡기,
+## "dodged" 피함, "blocked" (철벽)
+func take_grab(info: Dictionary, attacker: Node3D) -> String:
+	var r := _take_grab(info, attacker)
+	attack_received.emit("grabbed" if r == "thrown" else "grab_" + r)
+	return r
+
+
+func _take_grab(info: Dictionary, attacker: Node3D) -> String:
+	if dead:
+		return "none"
+	var to_attacker := attacker.global_position - global_position
+	to_attacker.y = 0
+	if _iframes > 0.0:
+		combat_event.emit("잡기 회피!", Color(0.6, 0.9, 1.0))
+		return "dodged"
+	if sm.state == "iron":
+		return "blocked"
+	if is_grabbing() and _attack_phase == "windup":
+		_react("recoil", to_attacker)
+		combat_event.emit("맞잡기!", Color(0.9, 0.9, 0.9))
+		return "clash"
+	if attack_threat():
+		combat_event.emit("잡기를 끊었다!", Color(0.6, 1.0, 0.6))
+		return "beaten"
+	_take_damage(int(info.damage), to_attacker)
+	combat_event.emit("잡혔다!", Color(1.0, 0.45, 0.8))
+	_react("thrown", Vector3.ZERO)
+	_kick = Vector3(deg_to_rad(-10.0), 0, deg_to_rad(8.0))
+	apply_throw(info.throw)
+	return "thrown"
+
+
+## 던져진다: 날아가는 동안 벽에 세게 부딪히면 '벽꽝'
+func apply_throw(vec: Vector3) -> void:
+	_thrown_t = float(MoveSet.THROW.slam_time)
+	if has_method("apply_knockback"):
+		call("apply_knockback", vec)
+	else:
+		velocity = vec
+
+
+func _wall_slam() -> void:
+	_thrown_t = 0.0
+	var dmg := int(MoveSet.THROW.wall_slam_damage)
+	_take_damage(dmg, -_wall_n)
+	combat_event.emit("벽꽝! -%d" % dmg, Color(1.0, 0.5, 0.3))
+	_shake = 0.9
+	_kick += Vector3(deg_to_rad(8.0), 0, 0)
+	Fx.impact(get_parent(), global_position + Vector3.UP * 1.2 - _wall_n * 0.3, _wall_n, Color(0.9, 0.85, 0.75), 18)
+	_react("wall_slam", Vector3.ZERO)
 
 
 # ---------------- 차지 베기 ----------------
@@ -904,9 +1187,15 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 		combat_event.emit("철벽!", Color(1.0, 0.85, 0.4))
 		_shake = 0.3
 		return "blocked"
+	if blocking and in_front and info.guard != "unblockable" and not AttackDir.blocks(guard_dir, info.get("dir", "")):
+		# 막기 방향이 틀렸다: 그대로 맞는다
+		combat_event.emit("%s 공격이었다!" % AttackDir.NAMES.get(info.dir, ""), Color(1.0, 0.55, 0.35))
+		_take_damage(damage, to_attacker)
+		_react(info.react, to_attacker)
+		return "wrong_guard"
 	if blocking and in_front and info.guard != "unblockable":
 		var contact := _blade_tip.global_position
-		if sm.time <= build.parry_window():
+		if _guard_t <= build.parry_window():
 			_play("parry", 1.0, -1.0)
 			Fx.sparks(get_parent(), contact, to_attacker.normalized(), 40, Color(0.7, 0.9, 1.0))
 			combat_event.emit("튕겨내기!", Color(0.55, 0.85, 1.0))
