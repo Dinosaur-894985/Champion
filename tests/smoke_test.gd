@@ -172,7 +172,7 @@ func _parkour_step() -> void:
 		_game.hud.hide_menu()
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		# 북동쪽 기둥 남쪽 면 앞에서, 기둥을 바라본다
-		player.global_position = Vector3(10, 0.1, -5.8)
+		player.global_position = Vector3(7, 0.1, -4.8)
 		player.rotation.y = 0.0
 		player.head.rotation.x = deg_to_rad(10)
 	if _frame == 6:
@@ -198,7 +198,7 @@ func _parkour_step() -> void:
 		if not ok:
 			_fail.append("wall climb")
 		# 서쪽 건물 동쪽 벽 옆에서 벽을 따라 달린다
-		player.global_position = Vector3(-12.9, 0.1, 4.5)
+		player.global_position = Vector3(-10.9, 0.1, 4.0)
 		player.velocity = Vector3.ZERO
 		player.rotation.y = 0.0
 		player.head.rotation.x = 0.0
@@ -231,9 +231,10 @@ func _parkour_step() -> void:
 
 ## [플레이어 자리, AI 가 이 높이 위로 올라오면 성공, AI 가 벽을 탈 수 있나, 이름]
 const CHASE_GOALS := [
-	[Vector3(-17, 4.3, -1), 3.9, true, "west_roof"],
-	[Vector3(-10, 6.1, -10), 5.7, true, "pillar_top"],
-	[Vector3(18, 3.1, 3.5), 2.95, false, "east_roof_by_ramp"],
+	[Vector3(-14, 3.6, -1), 3.4, true, "west_roof"],
+	[Vector3(-7, 6.6, -7), 6.1, true, "pillar_top"],
+	[Vector3(13, 3.1, -2.5), 2.95, false, "east_roof_by_stairs"],
+	[Vector3(-2, 6.6, 7), 6.1, false, "bridge_by_lift"],
 ]
 var _goal := 0
 var _goal_start := 0
@@ -606,7 +607,7 @@ func _skills_blink_grapple(player: Player) -> void:
 		if not ok:
 			_fail.append("blink")
 		# 북동쪽 기둥을 올려다보고 갈고리
-		player.global_position = Vector3(10, 0.1, 3.0)
+		player.global_position = Vector3(7, 0.1, 3.0)
 		player.velocity = Vector3.ZERO
 		player.rotation.y = 0.0
 		player.head.rotation.x = deg_to_rad(15)

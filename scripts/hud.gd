@@ -595,3 +595,39 @@ func _process(delta: float) -> void:
 	if _counter > 0.0:
 		target_a = 0.75 + sin(Time.get_ticks_msec() / 1000.0 * 18.0) * 0.25
 	_counter_vignette.modulate.a = move_toward(_counter_vignette.modulate.a, target_a, delta * 6.0)
+
+
+# ---------------- 경기장 소식, 높이 조작법 ----------------
+
+var _arena_status: Label
+var _help2: Label
+
+
+## 위 가운데 (상대 체력 아래): "다음 붕괴 12초"
+func set_arena_status(text: String) -> void:
+	if _arena_status == null:
+		_arena_status = Label.new()
+		_arena_status.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		_arena_status.position = Vector2(-150, 58)
+		_arena_status.size = Vector2(300, 24)
+		_arena_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_arena_status.add_theme_font_size_override("font_size", 17)
+		_arena_status.add_theme_constant_override("outline_size", 6)
+		_root.add_child(_arena_status)
+	_arena_status.visible = _mode == "duel"
+	_arena_status.text = text
+	var urgent := text.begins_with("붕괴")
+	_arena_status.modulate = Color(1.0, 0.45, 0.3) if urgent else Color(1, 1, 1, 0.85)
+
+
+## 조작법 아래에 높이 관련 조작을 덧붙인다
+func add_vertical_help() -> void:
+	if _help2 != null:
+		return
+	_help2 = Label.new()
+	_help2.text = "높은 곳에서 클릭 (아래를 보며)  낙하 찍기\n공중에서 클릭  공중 베기\n난간에 매달림  Space 올라서기 / 클릭 뛰어올라 베기 / S 놓기\n공중에서 줄에 닿으면  짚라인 (Space 뛰어내리기)\n강한 공격으로 상대를 낭떠러지로 밀어 떨어뜨리기"
+	_help2.add_theme_font_size_override("font_size", 15)
+	_help2.add_theme_color_override("font_color", Color(1.0, 0.9, 0.7, 0.92))
+	_help2.add_theme_constant_override("outline_size", 5)
+	_help.add_child(_help2)
+	_help2.position = Vector2(0, _help.get_minimum_size().y + 6)

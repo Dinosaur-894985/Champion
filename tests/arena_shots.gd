@@ -5,14 +5,15 @@ extends SceneTree
 
 const GAME := preload("res://scenes/main.tscn")
 const SPOTS := [
-	["a1_spawn", Vector3(0, 0.1, 6), 0.0, -4.0],
-	["a2_overview", Vector3(-10, 6.1, 10), -40.0, -18.0],
-	["a3_west_house", Vector3(-4, 0.1, 4), 70.0, 4.0],
-	["a4_east", Vector3(5, 0.1, -3), -80.0, 6.0],
-	["a5_gallery", Vector3(0, 0.1, -8), 0.0, 4.0],
-	["a6_south", Vector3(0, 0.1, 6), 180.0, 2.0],
-	["a7_roof", Vector3(-15, 4.3, -3), -60.0, -10.0],
-	["a8_pillar_top", Vector3(10, 6.1, -10), 135.0, -20.0],
+	["a1_spawn", Vector3(0, 0.1, 6), 0.0, 4.0],
+	["a2_overview", Vector3(-7, 6.6, 7), -45.0, -22.0],
+	["a3_bridge_up", Vector3(0, 0.1, 2), 0.0, 28.0],
+	["a4_east_zip", Vector3(-4, 0.1, 4), -90.0, 10.0],
+	["a5_west_house", Vector3(-4, 0.1, -2), 90.0, 6.0],
+	["a6_south", Vector3(0, 0.1, 3), 180.0, 4.0],
+	["a7_edge", Vector3(0, 0.1, 22), 180.0, -18.0],
+	["a8_obelisk", Vector3(-15, 0.1, -8), 48.0, 14.0],
+	["a9_high", Vector3(20, 8, 20), 45.0, -22.0],
 ]
 
 var _game: Node

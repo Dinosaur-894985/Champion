@@ -37,6 +37,7 @@ func _ready() -> void:
 
 	player = Player.new()
 	player.build = test_player_build.duplicate_build() if test_player_build else CharacterBuild.load_saved()
+	player.arena = arena
 	add_child(player)
 
 	hud = HUD_SCRIPT.new()
@@ -55,6 +56,7 @@ func _ready() -> void:
 		_setup_duel()
 	else:
 		_setup_practice()
+	_setup_arena_events()
 
 	_warmup()
 
@@ -143,12 +145,14 @@ func _countdown() -> void:
 	hud.show_big("싸워라!", Color(1.0, 0.8, 0.35))
 	player.controls_enabled = true
 	duelist.active = true
+	arena.director.running = true
 
 
 func _on_round_end(player_won: bool) -> void:
 	if round_over:
 		return
 	round_over = true
+	arena.director.running = false
 	duelist.active = false
 	player.controls_enabled = false
 	# 결정타 슬로모션
@@ -209,6 +213,18 @@ func restart(new_mode: String) -> void:
 	Engine.time_scale = 1.0
 	get_tree().paused = false
 	get_tree().reload_current_scene()
+
+
+## 경기장 소식(바닥 붕괴, 아이템)을 화면에 띄운다
+func _setup_arena_events() -> void:
+	arena.set_fighters([player, duelist] if duelist else [player])
+	arena.director.announce.connect(func(text: String, color: Color, big: bool):
+		if big:
+			hud.show_big(text, color)
+		else:
+			hud.show_event(text, color))
+	arena.director.status.connect(hud.set_arena_status)
+	hud.add_vertical_help()
 
 
 func _on_hit(_damage: int) -> void:
