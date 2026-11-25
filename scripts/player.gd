@@ -57,6 +57,9 @@ const BLOCK_SPEED_MULT := 0.45
 const PARRY_WINDOW := 0.2      # 막기를 누른 직후 이 시간 안에 맞으면 튕겨내기
 const BLOCK_COST := {"flinch": 14.0, "stagger": 30.0}
 
+## 이 캐릭터가 쓸 수 있는 이동 기술 (MoveSet.TRAVERSAL). 나중에 능력치/빌드로 정한다.
+var traits := {"wall_climb": true, "wall_run": true}
+
 var hp := MAX_HP
 var stamina := MAX_STAMINA
 var controls_enabled := true
@@ -64,7 +67,7 @@ var dead := false
 var blocking: bool:
 	get: return sm.state == "block"
 
-## 행동 상태: free, block, attack, charge, dash, stagger
+## 행동 상태: free, block, attack, charge, dash, stagger, climb(벽 오르기), wallrun(벽 달리기)
 var sm := StateMachine.new()
 
 var _regen_wait := 0.0
@@ -94,6 +97,18 @@ var _press_owner := ""         # 그 클릭으로 시작한 동작
 var _charge_level := 0.0
 var _charge_full := false
 var _hit_info := {}
+
+# 벽 동작
+var _wall_contact := false     # 지난 프레임에 벽에 닿았나
+var _wall_n := Vector3.ZERO    # 닿은 벽이 바라보는 방향
+var _wall_climbable := false
+var _climb_used := false       # 한 번 뛸 때 벽 오르기는 한 번만 (땅에 닿으면 다시)
+var _last_run_n := Vector3.ZERO
+var _run_n := Vector3.ZERO
+var _run_t := Vector3.ZERO
+var _fall_speed := 0.0
+var _ledge_y := -INF           # 벽 오르다 짚은 꼭대기 높이
+var _ray := PhysicsRayQueryParameters3D.new()
 
 # 경직
 var _stun_time := 0.0
@@ -166,8 +181,12 @@ func _ready() -> void:
 		.add("attack", _attack_enter, _attack_update, _attack_exit) \
 		.add("charge", _charge_enter, _charge_update, _charge_exit) \
 		.add("dash", _dash_enter, _dash_update) \
-		.add("stagger", _stagger_enter, _stagger_update)
+		.add("stagger", _stagger_enter, _stagger_update) \
+		.add("climb", _climb_enter, _climb_update, _climb_exit) \
+		.add("wallrun", _wallrun_enter, _wallrun_update, _wallrun_exit)
 	sm.go("free")
+	_ray.exclude = [get_rid()]
+	_ray.collision_mask = 1
 
 
 func _play(snd: String, pitch: float = 1.0, volume: float = -4.0) -> void:
@@ -249,7 +268,8 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _physics_process(delta: float) -> void:
 	var on_floor := is_on_floor()
-	if not on_floor:
+	var on_wall_move := sm.is_in(["climb", "wallrun"])
+	if not on_floor and not on_wall_move:
 		velocity.y -= _gravity * delta
 		_coyote -= delta
 	else:
@@ -272,7 +292,7 @@ func _physics_process(delta: float) -> void:
 
 	# ---- 아래 몸: 이동 ----
 	_jump_buffer -= delta
-	if _can_act() and sm.state != "dash" and Input.is_action_just_pressed("jump"):
+	if _can_act() and not sm.is_in(["dash", "climb", "wallrun"]) and Input.is_action_just_pressed("jump"):
 		_jump_buffer = JUMP_BUFFER
 	if _jump_buffer > 0.0 and _coyote > 0.0 and stamina >= JUMP_COST * 0.5:
 		velocity.y = JUMP_VELOCITY
@@ -288,12 +308,14 @@ func _physics_process(delta: float) -> void:
 			and input.y < 0.0 and stamina > 0.0
 	var speed := (SPRINT_SPEED if _sprinting else WALK_SPEED) * _move_mult()
 
-	if sm.state != "dash":
+	if not sm.is_in(["dash", "climb", "wallrun"]):
 		var accel := GROUND_ACCEL if on_floor else AIR_ACCEL
 		var target := dir * speed
 		velocity.x = lerpf(velocity.x, target.x, clampf(accel * delta, 0, 1))
 		velocity.z = lerpf(velocity.z, target.z, clampf(accel * delta, 0, 1))
+	_fall_speed = velocity.y
 	move_and_slide()
+	_after_move(on_floor, input)
 
 	# 기력
 	if _sprinting and dir != Vector3.ZERO and on_floor:
@@ -308,6 +330,155 @@ func _physics_process(delta: float) -> void:
 	var trail_mat: StandardMaterial3D = _trail.material_override
 	trail_mat.albedo_color.a = move_toward(trail_mat.albedo_color.a, 0.35 if _attack_phase == "active" else 0.0, delta * 4.0 if _attack_phase != "active" else 99.0)
 	_update_camera(delta, on_floor, _sprinting)
+
+
+# ---------------- 벽 동작 ----------------
+
+## 움직인 뒤: 벽에 닿았는지 보고, 조건이 맞으면 벽 오르기/벽 달리기를 시작한다.
+func _after_move(was_on_floor: bool, input: Vector2) -> void:
+	_wall_contact = false
+	for i in get_slide_collision_count():
+		var c := get_slide_collision(i)
+		var n := c.get_normal()
+		if absf(n.y) > 0.35:
+			continue
+		n.y = 0
+		_wall_contact = true
+		_wall_n = n.normalized()
+		var col := c.get_collider()
+		_wall_climbable = col != null and not (col as Object).has_meta("no_climb")
+	var on_floor := is_on_floor()
+	if on_floor:
+		if not was_on_floor and _fall_speed < -7.0:
+			# 높은 곳에서 떨어지면 착지할 때 화면이 살짝 눌린다
+			_kick.x -= deg_to_rad(clampf(-_fall_speed * 0.5, 0.0, 6.0))
+		_climb_used = false
+		_last_run_n = Vector3.ZERO
+		return
+	if sm.state != "free" or not _can_act():
+		return
+	var fwd := -transform.basis.z
+	fwd.y = 0
+	fwd = fwd.normalized()
+	var pushing_forward := input.y < -0.3
+	if not pushing_forward:
+		return
+	# 벽 오르기: 벽을 마주 보고 있을 때
+	var climb: Dictionary = MoveSet.TRAVERSAL.wall_climb
+	if traits.get("wall_climb", false) and _wall_contact and _wall_climbable and not _climb_used \
+			and fwd.dot(-_wall_n) > 0.6 and velocity.y > -5.0 and stamina > 5.0:
+		sm.go("climb")
+		return
+	# 벽 달리기: 벽이 옆에 있고 빠르게 달리고 있을 때
+	var run: Dictionary = MoveSet.TRAVERSAL.wall_run
+	var hspeed := Vector2(velocity.x, velocity.z).length()
+	if traits.get("wall_run", false) and hspeed >= run.min_speed and stamina >= run.cost * 0.5:
+		var n := _wall_n if _wall_contact else _side_wall()
+		if n != Vector3.ZERO and absf(fwd.dot(n)) < 0.5 and n.dot(_last_run_n) < 0.9:
+			sm.go("wallrun", {"n": n})
+
+
+## 몸 양옆 가까이에 벽이 있으면 그 벽의 방향, 없으면 ZERO
+func _side_wall() -> Vector3:
+	var right := transform.basis.x
+	right.y = 0
+	right = right.normalized()
+	for s in [-1.0, 1.0]:
+		var hit := _cast(global_position + Vector3.UP * 1.0, right * s * 0.95)
+		if not hit.is_empty() and absf((hit.normal as Vector3).y) < 0.35:
+			var n: Vector3 = hit.normal
+			n.y = 0
+			return n.normalized()
+	return Vector3.ZERO
+
+
+func _cast(from: Vector3, dir: Vector3) -> Dictionary:
+	_ray.from = from
+	_ray.to = from + dir
+	return get_world_3d().direct_space_state.intersect_ray(_ray)
+
+
+func _climb_enter(_d: Dictionary) -> void:
+	_climb_used = true
+	_ledge_y = -INF
+	_pose_to(MoveSet.FP_POSES.climb, 0.12)
+	_play("dash", 0.8, -12.0)
+
+
+func _climb_update(delta: float) -> void:
+	var t: Dictionary = MoveSet.TRAVERSAL.wall_climb
+	velocity = -_wall_n * 1.5 + Vector3.UP * float(t.speed)
+	if _ledge_y > -INF:
+		# 꼭대기를 짚었다: 발이 꼭대기 위로 올라오면 앞으로 올라선다
+		velocity = -_wall_n * 0.5 + Vector3.UP * float(t.mantle_up)
+		if global_position.y >= _ledge_y + 0.05:
+			velocity = -_wall_n * float(t.mantle_fwd) + Vector3.UP * 1.2
+			_kick.x += deg_to_rad(4.0)
+			sm.go("free")
+		return
+	_use_stamina(float(t.cost) * delta)
+	# 허리 높이 앞이 비었으면 꼭대기에 닿은 것 → 꼭대기 높이를 재고 짚는다
+	if _cast(global_position + Vector3.UP * 0.9, -_wall_n * 0.9).is_empty():
+		var down := _cast(global_position + Vector3.UP * 2.2 - _wall_n * 0.6, Vector3.DOWN * 2.4)
+		if not down.is_empty():
+			_ledge_y = (down.position as Vector3).y
+			return
+		sm.go("free")
+		return
+	if _can_act() and Input.is_action_just_pressed("jump"):
+		# 벽 차고 뒤로 뛰기
+		velocity = _wall_n * float(t.kick_out) + Vector3.UP * float(t.kick_up)
+		_play("dash", 1.1, -8.0)
+		sm.go("free")
+		return
+	var holding := _can_act() and Input.is_action_pressed("move_forward")
+	if not holding or stamina <= 0.0 or sm.time > float(t.max_time) or (not _wall_contact and sm.time > 0.1):
+		velocity.y = minf(velocity.y, 1.5)
+		sm.go("free")
+
+
+func _climb_exit() -> void:
+	_pose_to(MoveSet.FP_POSES.rest, 0.18)
+
+
+func _wallrun_enter(d: Dictionary) -> void:
+	var t: Dictionary = MoveSet.TRAVERSAL.wall_run
+	_run_n = d.n
+	_last_run_n = _run_n
+	_run_t = _run_n.cross(Vector3.UP).normalized()
+	var fwd := -transform.basis.z
+	if _run_t.dot(Vector3(velocity.x, 0, velocity.z) + fwd) < 0.0:
+		_run_t = -_run_t
+	velocity.y = maxf(velocity.y, float(t.lift))
+	_use_stamina(float(t.cost))
+	_pose_to(MoveSet.FP_POSES.wallrun, 0.12)
+	_play("dash", 0.9, -10.0)
+
+
+func _wallrun_update(delta: float) -> void:
+	var t: Dictionary = MoveSet.TRAVERSAL.wall_run
+	var spd: float = t.speed
+	velocity.x = _run_t.x * spd - _run_n.x * 1.5
+	velocity.z = _run_t.z * spd - _run_n.z * 1.5
+	velocity.y -= _gravity * float(t.gravity) * delta
+	if _can_act() and Input.is_action_just_pressed("jump"):
+		# 벽 차고 뛰기: 다른 벽으로 이어 달릴 수 있다
+		velocity = _run_n * float(t.jump_out) + _run_t * spd * 0.75 + Vector3.UP * float(t.jump_up)
+		_play("dash", 1.2, -8.0)
+		sm.go("free")
+		return
+	var holding := _can_act() and Input.is_action_pressed("move_forward")
+	var near_wall := _wall_contact or not _cast(global_position + Vector3.UP * 1.0, -_run_n * 0.9).is_empty()
+	if is_on_floor() or not holding or sm.time > float(t.max_time) or not near_wall:
+		sm.go("free")
+
+
+func _wallrun_exit() -> void:
+	_pose_to(MoveSet.FP_POSES.rest, 0.18)
+
+
+func is_on_wall_move() -> bool:
+	return sm.is_in(["climb", "wallrun"])
 
 
 ## 행동마다 이동 속도가 얼마나 느려지는지
@@ -802,12 +973,20 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 	var roll_target := 0.0
 	if sm.state == "dash":
 		roll_target = -_dash_local.x * deg_to_rad(7.0)
+	elif sm.state == "wallrun":
+		# 벽 반대쪽으로 화면이 기운다
+		var ln := global_transform.basis.inverse() * _run_n
+		roll_target = ln.x * deg_to_rad(12.0)
 	_roll = lerpf(_roll, roll_target, clampf(delta * 10.0, 0, 1))
 	camera.rotation = _kick + Vector3(0, 0, _roll)
 	# 달리거나 대시할 때 시야가 넓어짐
 	var target_fov := 78.0
 	if sm.state == "dash":
 		target_fov = 90.0
+	elif sm.state == "wallrun":
+		target_fov = 92.0
+	elif sm.state == "climb":
+		target_fov = 82.0
 	elif sm.state == "charge":
 		target_fov = 78.0 - _charge_level * 6.0
 	elif sprinting and horiz > WALK_SPEED:
