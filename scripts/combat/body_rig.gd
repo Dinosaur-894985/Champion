@@ -11,6 +11,8 @@ const WALK_REF_SPEED := 3.9
 
 var blade_tip: Node3D
 var blade_mat: StandardMaterial3D
+## 들고 있는 무기 (Weapons.WEAPONS). 씬에 넣기 전에 정한다.
+var weapon := "sword"
 
 # 부품
 var _leg_l: Node3D
@@ -222,23 +224,23 @@ func _build() -> void:
 	_wrist.position = Vector3(0, -0.6, 0)
 	_arm_r.add_child(_wrist)
 	LowPoly.part(_wrist, LowPoly.sphere(0.055, 6, 4), leather, Vector3.ZERO)
-	# 칼날은 손에서 앞(-Z)으로 뻗는다
-	var sword := Node3D.new()
-	_wrist.add_child(sword)
-	var steel := LowPoly.mat(Color(0.72, 0.75, 0.8), 0.3, 0.85)
-	var brass := LowPoly.mat(Color(0.6, 0.45, 0.2), 0.4, 0.8)
-	blade_mat = LowPoly.mat(Color(0.8, 0.83, 0.88), 0.25, 0.85)
-	blade_mat.emission_enabled = true
+	# 무기는 손에서 앞(-Z)으로 뻗는다. 모양은 Weapons.build_model (+Y 로 뻗는 모양을 눕혀서 붙인다)
+	var holder := Node3D.new()
+	holder.rotation_degrees = Vector3(-90, 0, 0)
+	if weapon == "spear":
+		holder.position = Vector3(0, 0, 0.35)   # 긴 자루는 뒤로도 나온다
+	_wrist.add_child(holder)
+	var model := Weapons.build_model(holder, weapon)
+	blade_mat = model.mat
 	blade_mat.emission = Color(1.0, 0.5, 0.1)
-	blade_mat.emission_energy_multiplier = 0.0
-	LowPoly.part(sword, LowPoly.cyl(0.02, 0.022, 0.18, 6), leather, Vector3(0, 0, 0.02), Vector3(90, 0, 0))
-	LowPoly.part(sword, LowPoly.box(Vector3(0.22, 0.03, 0.045)), brass, Vector3(0, 0, -0.08))
-	LowPoly.part(sword, LowPoly.box(Vector3(0.055, 0.013, 0.82)), blade_mat, Vector3(0, 0, -0.5))
-	LowPoly.part(sword, LowPoly.prism(Vector3(0.055, 0.11, 0.013)), blade_mat, Vector3(0, 0, -0.96), Vector3(-90, 0, 0))
-	LowPoly.part(sword, LowPoly.box(Vector3(0.008, 0.016, 0.8)), steel, Vector3(0, 0, -0.5))
-	blade_tip = Node3D.new()
-	blade_tip.position = Vector3(0, 0, -0.7)
-	sword.add_child(blade_tip)
+	blade_tip = model.tip
+	if weapon == "daggers":
+		# 왼손에도 단검 하나
+		var lh := Node3D.new()
+		lh.position = Vector3(0, -0.6, 0)
+		lh.rotation_degrees = Vector3(-70, 0, 0)
+		_arm_l.add_child(lh)
+		Weapons.build_model(lh, weapon, true)
 
 	for m in find_children("*", "MeshInstance3D", true, false):
 		if not _body_meshes.has(m):

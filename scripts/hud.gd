@@ -20,6 +20,10 @@ var _root: Control
 var _crosshair: Control
 var _dir_ind: Control
 var _stamina_bar: ProgressBar
+var _gauge_bar: ProgressBar
+var _gauge_label: Label
+var _gauge_ready := false
+var _enemy_gauge: ProgressBar
 var _hp_bar: ProgressBar
 var _hp_box: Control
 var _enemy_box: Control
@@ -122,6 +126,20 @@ func _ready() -> void:
 	st_label.position = Vector2(-160, -72)
 	_root.add_child(st_label)
 
+	# 필살기 게이지 (기력 막대 아래, 금색). 다 차면 빛난다.
+	_gauge_bar = _make_bar(Color(1.0, 0.72, 0.15), Vector2(320, 8))
+	_gauge_bar.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_gauge_bar.position = Vector2(-160, -32)
+	_gauge_bar.value = 0
+	_root.add_child(_gauge_bar)
+	_gauge_label = _small_label("")
+	_gauge_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_gauge_label.position = Vector2(-160, -72)
+	_gauge_label.size = Vector2(320, 20)
+	_gauge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_gauge_label.add_theme_constant_override("outline_size", 4)
+	_root.add_child(_gauge_label)
+
 	# 내 체력 (왼쪽 아래)
 	_hp_box = Control.new()
 	_hp_box.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
@@ -149,6 +167,10 @@ func _ready() -> void:
 	_enemy_stamina = _make_bar(Color(0.95, 0.80, 0.35, 0.85), Vector2(440, 5))
 	_enemy_stamina.position = Vector2(0, 44)
 	_enemy_box.add_child(_enemy_stamina)
+	_enemy_gauge = _make_bar(Color(1.0, 0.72, 0.15, 0.9), Vector2(440, 4))
+	_enemy_gauge.position = Vector2(0, 52)
+	_enemy_gauge.value = 0
+	_enemy_box.add_child(_enemy_gauge)
 
 	# 특수 스킬 칸 (오른쪽 아래)
 	for i in 2:
@@ -164,7 +186,7 @@ func _ready() -> void:
 
 	# 조작법 (왼쪽 위)
 	_help = Label.new()
-	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n벽을 보고 W + Space  벽 타고 오르기 (위에서 W 누른 채 올라섬)\n벽 옆을 달리다 Space  벽 달리기 (달리는 중 Space: 벽 차고 뛰기)\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n마우스를 살짝 위로/아래로 움직이며 클릭  내려베기 / 찌르기\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\nE / R  특수 스킬 (오른쪽 아래 칸)\n오른쪽 클릭  막기 — 막는 중 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\nF  잡아 던지기 (막는 상대에게. 휘두르는 상대에겐 끊긴다)\n휘두르기 전에 오른쪽 클릭/F/Shift  속임수 (공격 멈추기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
+	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n벽을 보고 W + Space  벽 타고 오르기 (위에서 W 누른 채 올라섬)\n벽 옆을 달리다 Space  벽 달리기 (달리는 중 Space: 벽 차고 뛰기)\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n마우스를 살짝 위로/아래로 움직이며 클릭  내려베기 / 찌르기\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\nE / R  특수 스킬 (오른쪽 아래 칸)\n오른쪽 클릭  막기 — 막는 중 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\nV  무기 필살기 (아래 금색 게이지가 다 차면)\nF  잡아 던지기 (막는 상대에게. 휘두르는 상대에겐 끊긴다)\n휘두르기 전에 오른쪽 클릭/F/Shift  속임수 (공격 멈추기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
 	_help.add_theme_font_size_override("font_size", 15)
 	_help.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
 	_help.add_theme_constant_override("outline_size", 5)   # 밝은 경기장에서도 읽히게
@@ -414,6 +436,16 @@ func _notification(what: int) -> void:
 		show_menu("pause")
 
 
+## 필살기 게이지
+func set_gauge(value: float, max_value: float) -> void:
+	_gauge_bar.max_value = max_value
+	_gauge_bar.value = value
+	_gauge_ready = value >= max_value
+	if _player:
+		var sp: Dictionary = Weapons.get_weapon(_player.weapon).special
+		_gauge_label.text = ("V  %s  준비!" if _gauge_ready else "필살기  %s") % sp.name
+
+
 func set_stamina(value: float, max_value: float) -> void:
 	_stamina_bar.max_value = max_value
 	_stamina_bar.value = value
@@ -445,7 +477,7 @@ func set_enemy(b: CharacterBuild) -> void:
 	var sk := []
 	for s in b.skills:
 		sk.append(CharacterBuild.SKILLS[s].name)
-	_enemy_name.text = b.name + ("   ·   " + ", ".join(sk) if not sk.is_empty() else "")
+	_enemy_name.text = b.name + "   ·   " + Weapons.display_name(b.weapon) + ("   ·   " + ", ".join(sk) if not sk.is_empty() else "")
 	set_enemy_hp(b.max_hp(), b.max_hp())
 	_enemy_bar.value = b.max_hp()
 	set_enemy_stamina(b.max_stamina(), b.max_stamina())
@@ -454,12 +486,19 @@ func set_enemy(b: CharacterBuild) -> void:
 ## 대결 상대: 방향 표시에 상대 공격/막기를 보여 준다
 func set_opponent(d: Duelist) -> void:
 	_dir_ind.opponent = d
+	_enemy_gauge.value = 0
+	d.gauge_changed.connect(func(v, m):
+		_enemy_gauge.max_value = m
+		_enemy_gauge.value = v)
 
 
 ## 내 캐릭터: 스킬 칸을 채운다
 func set_player(p: Player) -> void:
 	_player = p
 	_dir_ind.player = p
+	_gauge_bar.value = p.gauge
+	set_gauge(p.gauge, Weapons.GAUGE_MAX)
+	p.gauge_changed.connect(set_gauge)
 	for i in _slots.size():
 		var slot: Dictionary = _slots[i]
 		if i >= p.build.skills.size():
@@ -581,6 +620,10 @@ func show_big(text: String, color: Color) -> void:
 
 func _process(delta: float) -> void:
 	_update_slots()
+	# 필살기가 준비되면 게이지가 깜빡인다
+	var glow := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 1000.0 * 8.0) if _gauge_ready else 0.0
+	_gauge_bar.modulate = Color(1, 1, 1).lerp(Color(1.6, 1.4, 0.8), glow)
+	_gauge_label.modulate = Color(1.0, 0.85, 0.4) if _gauge_ready else Color(1, 1, 1, 0.75)
 	_pulse = maxf(_pulse - delta * 5.0, 0.0)
 	var ch := _crosshair as Crosshair
 	ch.pulse = _pulse

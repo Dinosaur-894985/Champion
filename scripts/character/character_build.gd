@@ -1,6 +1,7 @@
 class_name CharacterBuild
 extends RefCounted
-## 캐릭터 빌드: 능력치 5개 + 특수 스킬 2개.
+## 캐릭터 빌드: 무기 1개 + 능력치 5개 + 특수 스킬 2개.
+## 무기는 점수를 먹지 않는다 (무기 표는 scripts/combat/weapons.gd).
 ## 플레이어와 AI 가 똑같은 규칙을 쓴다. 숫자를 바꾸고 싶으면 이 파일의 표만 고치면 된다.
 ##
 ## 점수 규칙
@@ -62,15 +63,16 @@ const SKILL_ORDER := ["wall", "double_jump", "blink", "grapple", "haste", "iron_
 
 ## 미리 만들어 둔 캐릭터 (AI '지정' 모드, 랜덤의 참고)
 const PRESETS := {
-	"검객": {"stats": {"str": 5, "vit": 5, "agi": 5, "tec": 6, "end": 5}, "skills": ["wall", "haste"]},
-	"탱커": {"stats": {"str": 8, "vit": 9, "agi": 2, "tec": 3, "end": 5}, "skills": ["iron_guard"]},
-	"암살자": {"stats": {"str": 4, "vit": 3, "agi": 8, "tec": 7, "end": 3}, "skills": ["wall", "blink"]},
-	"사냥꾼": {"stats": {"str": 6, "vit": 4, "agi": 6, "tec": 4, "end": 7}, "skills": ["grapple", "double_jump"]},
-	"광전사": {"stats": {"str": 10, "vit": 6, "agi": 4, "tec": 3, "end": 3}, "skills": ["haste", "iron_guard"]},
+	"검객": {"weapon": "sword", "stats": {"str": 5, "vit": 5, "agi": 5, "tec": 6, "end": 5}, "skills": ["wall", "haste"]},
+	"탱커": {"weapon": "greatsword", "stats": {"str": 8, "vit": 9, "agi": 2, "tec": 3, "end": 5}, "skills": ["iron_guard"]},
+	"암살자": {"weapon": "daggers", "stats": {"str": 4, "vit": 3, "agi": 8, "tec": 7, "end": 3}, "skills": ["wall", "blink"]},
+	"사냥꾼": {"weapon": "spear", "stats": {"str": 6, "vit": 4, "agi": 6, "tec": 4, "end": 7}, "skills": ["grapple", "double_jump"]},
+	"광전사": {"weapon": "greatsword", "stats": {"str": 10, "vit": 6, "agi": 4, "tec": 3, "end": 3}, "skills": ["haste", "iron_guard"]},
 }
 const PRESET_ORDER := ["검객", "탱커", "암살자", "사냥꾼", "광전사"]
 
 var name := "나"
+var weapon := "sword"
 var stats := {"str": 5, "vit": 5, "agi": 5, "tec": 5, "end": 5}
 var skills: Array = ["wall", "double_jump"]
 
@@ -132,6 +134,7 @@ func has(skill: String) -> bool:
 func duplicate_build() -> CharacterBuild:
 	var b := CharacterBuild.new()
 	b.name = name
+	b.weapon = weapon
 	b.stats = stats.duplicate()
 	b.skills = skills.duplicate()
 	return b
@@ -202,7 +205,7 @@ func summary() -> String:
 	var sk := []
 	for s in skills:
 		sk.append(SKILLS[s].name)
-	return "  ".join(parts) + ("   |   " + ", ".join(sk) if not sk.is_empty() else "")
+	return Weapons.display_name(weapon) + "   |   " + "  ".join(parts) + ("   |   " + ", ".join(sk) if not sk.is_empty() else "")
 
 
 # ---------------- 랜덤, 저장 ----------------
@@ -214,6 +217,7 @@ static func random_build(rng: RandomNumberGenerator = null) -> CharacterBuild:
 		rng.randomize()
 	var b := CharacterBuild.new()
 	b.name = "랜덤 결투사"
+	b.weapon = Weapons.ORDER[rng.randi_range(0, Weapons.ORDER.size() - 1)]
 	for k in STAT_ORDER:
 		b.stats[k] = STAT_MIN
 	b.skills = []
@@ -249,6 +253,7 @@ static func preset(preset_name: String) -> CharacterBuild:
 	var p: Dictionary = PRESETS[preset_name]
 	var b := CharacterBuild.new()
 	b.name = preset_name
+	b.weapon = p.get("weapon", "sword")
 	b.stats = p.stats.duplicate()
 	b.skills = p.skills.duplicate()
 	return b
@@ -256,6 +261,7 @@ static func preset(preset_name: String) -> CharacterBuild:
 
 func save() -> void:
 	var cfg := ConfigFile.new()
+	cfg.set_value("build", "weapon", weapon)
 	cfg.set_value("build", "stats", stats)
 	cfg.set_value("build", "skills", skills)
 	cfg.save(SAVE_PATH)
@@ -271,6 +277,7 @@ static func load_saved() -> CharacterBuild:
 	var sk = cfg.get_value("build", "skills", [])
 	if st is Dictionary and sk is Array:
 		var cand := CharacterBuild.new()
+		cand.weapon = Weapons.valid(str(cfg.get_value("build", "weapon", "sword")))
 		for k in STAT_ORDER:
 			cand.stats[k] = int(st.get(k, 5))
 		cand.skills = []

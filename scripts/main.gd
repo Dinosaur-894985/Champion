@@ -251,6 +251,7 @@ func _setup_inputs() -> void:
 	_bind_keys("skill1", [KEY_E])
 	_bind_keys("skill2", [KEY_R])
 	_bind_keys("grab", [KEY_F])
+	_bind_keys("special", [KEY_V])
 	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
 	_bind_mouse("block", MOUSE_BUTTON_RIGHT)
 
