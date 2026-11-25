@@ -29,7 +29,7 @@
 | 질풍 | 1 | E/R | 3.5초 동안 이동과 공격이 빨라짐, 쿨타임 12초 |
 | 철벽 | 3 | E/R | 1.3초 동안 어느 방향 공격이든 막음 (막기 깨기도 버팀), 쿨타임 14초 |
 
-첫 번째로 고른 스킬이 E, 두 번째가 R 입니다. 숫자는 `scripts/build/character_build.gd` 표에서 바꿀 수 있어요.
+첫 번째로 고른 스킬이 E, 두 번째가 R 입니다. 숫자는 `scripts/character/character_build.gd` 표에서 바꿀 수 있어요.
 
 ## 웹에서 바로 하기 (다운로드 없음)
 
@@ -70,7 +70,7 @@ main 에 합쳐질 때마다 웹 버전이 자동으로 올라갑니다: https:/
 - `scripts/duelist.gd` AI 결투사 (판단: 공격 고르기, 막기, 피하기, 반격)
 - `scripts/combat/move_set.gd` **동작 표**: 모든 공격의 시간, 피해, 경직, 칼 자세. 새 기술/무기는 여기에 추가
 - `scripts/combat/state_machine.gd` 행동 상태 기계 (가만히, 막기, 공격, 차지, 대시, 경직...)
-- `scripts/build/character_build.gd` **캐릭터 규칙**: 능력치, 특수 스킬, 점수, 정해진 상대, 저장
+- `scripts/character/character_build.gd` **캐릭터 규칙**: 능력치, 특수 스킬, 점수, 정해진 상대, 저장
 - `scripts/combat/skill_kit.gd` 특수 스킬 쿨타임/기력/질풍 (플레이어와 AI 공용)
 - `scripts/ui/build_editor.gd` 캐릭터 만들기 화면
 - `scripts/combat/body_rig.gd` 3인칭 몸과 움직임 (아래 몸 / 위 몸 / 흔들림 세 겹을 합침)

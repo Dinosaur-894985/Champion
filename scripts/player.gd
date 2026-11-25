@@ -1064,7 +1064,7 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 
 
 # ---------------- 특수 스킬 ----------------
-# 스킬 수치(쿨타임, 기력, 거리)는 scripts/build/character_build.gd 의 SKILLS 표에 있다.
+# 스킬 수치(쿨타임, 기력, 거리)는 scripts/character/character_build.gd 의 SKILLS 표에 있다.
 # 쿨타임과 기력 계산은 SkillKit 이 하고, 여기서는 몸을 움직인다.
 
 ## E 는 첫 번째 스킬, R 은 두 번째 스킬. 늘 켜져 있는 스킬(벽타기, 이중 점프)이면 아무 일도 없다.
