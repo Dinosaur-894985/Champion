@@ -7,6 +7,13 @@ const HUD_SCRIPT := preload("res://scripts/hud.gd")
 
 ## 다시 불러올 때 시작할 모드. "" 이면 처음 켠 것이라 시작 화면을 보여준다.
 static var next_mode := ""
+## AI 상대 고르는 방식: "random" 랜덤, "preset" 지정(미리 만든 캐릭터), "mirror" 거울(내 캐릭터와 같음)
+static var opponent_mode := "random"
+static var opponent_preset := "검객"
+## 지금 대결 중인 상대. '다시 대결' 하면 같은 상대가 나온다.
+static var current_opponent: CharacterBuild = null
+## 점검용: 정해 두면 저장된 캐릭터 대신 이 캐릭터로 시작한다
+static var test_player_build: CharacterBuild = null
 
 var mode := "practice"
 var arena: Arena
@@ -29,6 +36,7 @@ func _ready() -> void:
 	mode = "practice" if first_launch else next_mode
 
 	player = Player.new()
+	player.build = test_player_build.duplicate_build() if test_player_build else CharacterBuild.load_saved()
 	add_child(player)
 
 	hud = HUD_SCRIPT.new()
@@ -39,6 +47,9 @@ func _ready() -> void:
 	player.took_damage.connect(hud.on_player_damaged)
 	player.combat_event.connect(hud.show_event)
 	player.counter_window.connect(hud.set_counter_window)
+	hud.set_player(player)
+	hud.set_stamina(player.stamina, player.max_stamina)
+	hud.set_player_hp(player.hp, player.max_hp)
 
 	if mode == "duel":
 		_setup_duel()
@@ -73,6 +84,9 @@ func _setup_duel() -> void:
 	player.position = Vector3(0, 0.1, 6.0)
 	hud.set_mode("duel")
 	duelist = Duelist.new()
+	if current_opponent == null:
+		current_opponent = make_opponent(opponent_mode, player.build)
+	duelist.build = current_opponent
 	duelist.position = Vector3(0, 0.1, -6.0)
 	duelist.arena = arena
 	add_child(duelist)
@@ -80,6 +94,8 @@ func _setup_duel() -> void:
 	player.attack_started.connect(duelist.on_target_attack)
 	player.charge_started.connect(duelist.on_target_charge)
 	duelist.hp_changed.connect(hud.set_enemy_hp)
+	duelist.stamina_changed.connect(hud.set_enemy_stamina)
+	hud.set_enemy(duelist.build)
 	duelist.combat_event.connect(hud.show_event)
 	duelist.died.connect(_on_round_end.bind(true))
 	player.died.connect(_on_round_end.bind(false))
@@ -89,6 +105,18 @@ func _setup_duel() -> void:
 ## 효과(불꽃, 파편, 피해 숫자, 번쩍임)를 시작 전에 한 번씩 몰래 그려 둔다.
 ## 처음 그릴 때 그래픽 준비(셰이더 컴파일)로 화면이 멈칫하는데, 특히 웹에서 심하다.
 ## 그래서 싸우는 도중이 아니라 시작 화면이 가려진 동안 미리 해 둔다.
+## 모드에 맞는 AI 상대 캐릭터를 만든다
+static func make_opponent(how: String, mine: CharacterBuild) -> CharacterBuild:
+	match how:
+		"mirror":
+			var b := mine.duplicate_build()
+			b.name = "거울"
+			return b
+		"preset":
+			return CharacterBuild.preset(opponent_preset)
+	return CharacterBuild.random_build()
+
+
 func _warmup() -> void:
 	hud.cover(0.5)
 	var cam := player.camera
@@ -130,7 +158,32 @@ func _on_round_end(player_won: bool) -> void:
 
 
 func _on_menu_choice(choice: String) -> void:
+	if choice.begins_with("vs_"):
+		# 상대 고르기: vs_random, vs_mirror, vs_preset:이름
+		if choice.begins_with("vs_preset:"):
+			opponent_mode = "preset"
+			opponent_preset = choice.substr(10)
+		else:
+			opponent_mode = choice.substr(3)
+		current_opponent = null
+		restart("duel")
+		return
 	match choice:
+		"opponent":
+			hud.show_menu("opponent")
+		"presets":
+			hud.show_menu("presets")
+		"back":
+			hud.go_back()
+		"build":
+			hud.open_build_editor(player.build)
+		"build_saved":
+			# 캐릭터를 바꿨다: 새 캐릭터로 지금 모드를 다시 시작 (처음 화면이었으면 연습장)
+			if opponent_mode == "mirror":
+				current_opponent = null
+			restart(mode)
+		"build_cancel":
+			hud.show_menu(hud.menu_return)
 		"resume":
 			hud.hide_menu()
 		"practice", "duel":
@@ -176,6 +229,8 @@ func _setup_inputs() -> void:
 	_bind_keys("sprint", [KEY_SHIFT])
 	_bind_keys("jump", [KEY_SPACE])
 	_bind_keys("heavy_attack", [KEY_Q])
+	_bind_keys("skill1", [KEY_E])
+	_bind_keys("skill2", [KEY_R])
 	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
 	_bind_mouse("block", MOUSE_BUTTON_RIGHT)
 

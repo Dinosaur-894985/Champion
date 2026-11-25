@@ -57,11 +57,16 @@ const BLOCK_SPEED_MULT := 0.45
 const PARRY_WINDOW := 0.2      # 막기를 누른 직후 이 시간 안에 맞으면 튕겨내기
 const BLOCK_COST := {"flinch": 14.0, "stagger": 30.0}
 
-## 이 캐릭터가 쓸 수 있는 이동 기술 (MoveSet.TRAVERSAL). 나중에 능력치/빌드로 정한다.
+## 내 캐릭터 (능력치, 특수 스킬). 씬에 넣기 전에 정해 둔다. 없으면 기본 캐릭터.
+var build: CharacterBuild
+## 이 캐릭터가 쓸 수 있는 이동 기술 (MoveSet.TRAVERSAL). 빌드의 '벽타기' 스킬로 켜진다.
 var traits := {"wall_climb": true, "wall_run": true}
 
+var max_hp := MAX_HP
+var max_stamina := MAX_STAMINA
 var hp := MAX_HP
 var stamina := MAX_STAMINA
+var skills: SkillKit
 var controls_enabled := true
 var dead := false
 var blocking: bool:
@@ -73,6 +78,7 @@ var sm := StateMachine.new()
 var _regen_wait := 0.0
 var _coyote := 0.0
 var _jump_buffer := 0.0
+var _jump_released := true
 var _bob_t := 0.0
 var _gravity: float = ProjectSettings.get_setting("physics/3d/default_gravity")
 var _sprinting := false
@@ -110,6 +116,11 @@ var _fall_speed := 0.0
 var _ledge_y := -INF           # 벽 오르다 짚은 꼭대기 높이
 var _ray := PhysicsRayQueryParameters3D.new()
 
+# 특수 스킬
+var _grap_point := Vector3.ZERO
+var _grap_body: Node3D = null
+var _rope: MeshInstance3D
+
 # 경직
 var _stun_time := 0.0
 var _stun_kind := ""
@@ -134,6 +145,14 @@ var _hit_query := PhysicsShapeQueryParameters3D.new()
 
 
 func _ready() -> void:
+	if build == null:
+		build = CharacterBuild.new()
+	max_hp = build.max_hp()
+	hp = max_hp
+	max_stamina = build.max_stamina()
+	stamina = max_stamina
+	traits = {"wall_climb": build.has("wall"), "wall_run": build.has("wall")}
+	skills = SkillKit.new(self, build)
 	collision_layer = 1
 	collision_mask = 1 | 2
 	var col := CollisionShape3D.new()
@@ -183,10 +202,13 @@ func _ready() -> void:
 		.add("dash", _dash_enter, _dash_update) \
 		.add("stagger", _stagger_enter, _stagger_update) \
 		.add("climb", _climb_enter, _climb_update, _climb_exit) \
-		.add("wallrun", _wallrun_enter, _wallrun_update, _wallrun_exit)
+		.add("wallrun", _wallrun_enter, _wallrun_update, _wallrun_exit) \
+		.add("grapple", _grapple_enter, _grapple_update, _grapple_exit) \
+		.add("iron", _iron_enter, _iron_update, _iron_exit)
 	sm.go("free")
 	_ray.exclude = [get_rid()]
 	_ray.collision_mask = 1
+	_build_rope()
 
 
 func _play(snd: String, pitch: float = 1.0, volume: float = -4.0) -> void:
@@ -264,11 +286,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		_request_attack("heavy")
 	elif event.is_action_pressed("sprint"):
 		try_dash()
+	elif event.is_action_pressed("skill1"):
+		use_skill_slot(0)
+	elif event.is_action_pressed("skill2"):
+		use_skill_slot(1)
 
 
 func _physics_process(delta: float) -> void:
 	var on_floor := is_on_floor()
-	var on_wall_move := sm.is_in(["climb", "wallrun"])
+	var on_wall_move := sm.is_in(["climb", "wallrun", "grapple"])
 	if not on_floor and not on_wall_move:
 		velocity.y -= _gravity * delta
 		_coyote -= delta
@@ -276,6 +302,7 @@ func _physics_process(delta: float) -> void:
 		_coyote = COYOTE_TIME
 
 	_iframes = maxf(_iframes - delta, 0.0)
+	skills.tick(delta)
 	_dash_cd = maxf(_dash_cd - delta, 0.0)
 	_since_dash += delta
 	if _press_t >= 0.0:
@@ -292,12 +319,21 @@ func _physics_process(delta: float) -> void:
 
 	# ---- 아래 몸: 이동 ----
 	_jump_buffer -= delta
-	if _can_act() and not sm.is_in(["dash", "climb", "wallrun"]) and Input.is_action_just_pressed("jump"):
+	# 이중 점프는 점프 키를 한 번 뗐다가 다시 눌러야 나간다 (같은 누름으로 두 번 뛰지 않게)
+	if not Input.is_action_pressed("jump"):
+		_jump_released = true
+	if _can_act() and not sm.is_in(["dash", "climb", "wallrun", "grapple"]) and Input.is_action_just_pressed("jump"):
 		_jump_buffer = JUMP_BUFFER
+		# 이중 점프: 공중에서 한 번 더
+		if _coyote <= 0.0 and _jump_released and skills.try_double_jump(JUMP_VELOCITY * 0.95):
+			_jump_buffer = 0.0
+			_play("dash", 1.35, -8.0)
+			Fx.sparks(get_parent(), global_position, Vector3.DOWN, 10, Color(0.85, 0.9, 1.0))
 	if _jump_buffer > 0.0 and _coyote > 0.0 and stamina >= JUMP_COST * 0.5:
 		velocity.y = JUMP_VELOCITY
 		_jump_buffer = 0.0
 		_coyote = 0.0
+		_jump_released = false
 		_use_stamina(JUMP_COST)
 
 	var input := Vector2.ZERO
@@ -306,9 +342,9 @@ func _physics_process(delta: float) -> void:
 	var dir := (transform.basis * Vector3(input.x, 0, input.y)).normalized()
 	_sprinting = _can_act() and sm.state == "free" and Input.is_action_pressed("sprint") \
 			and input.y < 0.0 and stamina > 0.0
-	var speed := (SPRINT_SPEED if _sprinting else WALK_SPEED) * _move_mult()
+	var speed := (SPRINT_SPEED if _sprinting else WALK_SPEED) * _move_mult() * build.speed_mult() * skills.speed_mult()
 
-	if not sm.is_in(["dash", "climb", "wallrun"]):
+	if not sm.is_in(["dash", "climb", "wallrun", "grapple"]):
 		var accel := GROUND_ACCEL if on_floor else AIR_ACCEL
 		var target := dir * speed
 		velocity.x = lerpf(velocity.x, target.x, clampf(accel * delta, 0, 1))
@@ -322,14 +358,16 @@ func _physics_process(delta: float) -> void:
 		_use_stamina(SPRINT_COST * delta)
 	elif _regen_wait > 0.0:
 		_regen_wait -= delta
-	elif stamina < MAX_STAMINA:
-		var regen := STAMINA_REGEN * (0.5 if sm.state in ["block", "charge"] else 1.0)
-		stamina = minf(stamina + regen * delta, MAX_STAMINA)
-		stamina_changed.emit(stamina, MAX_STAMINA)
+	elif stamina < max_stamina:
+		var regen := STAMINA_REGEN * build.regen_mult() * skills.regen_mult() \
+				* (0.5 if sm.state in ["block", "charge"] else 1.0)
+		stamina = minf(stamina + regen * delta, max_stamina)
+		stamina_changed.emit(stamina, max_stamina)
 
 	var trail_mat: StandardMaterial3D = _trail.material_override
 	trail_mat.albedo_color.a = move_toward(trail_mat.albedo_color.a, 0.35 if _attack_phase == "active" else 0.0, delta * 4.0 if _attack_phase != "active" else 99.0)
 	_update_camera(delta, on_floor, _sprinting)
+	_update_rope()
 
 
 # ---------------- 벽 동작 ----------------
@@ -354,6 +392,7 @@ func _after_move(was_on_floor: bool, input: Vector2) -> void:
 			_kick.x -= deg_to_rad(clampf(-_fall_speed * 0.5, 0.0, 6.0))
 		_climb_used = false
 		_last_run_n = Vector3.ZERO
+		skills.landed()
 		return
 	if sm.state != "free" or not _can_act():
 		return
@@ -478,7 +517,7 @@ func _wallrun_exit() -> void:
 
 
 func is_on_wall_move() -> bool:
-	return sm.is_in(["climb", "wallrun"])
+	return sm.is_in(["climb", "wallrun", "grapple"])
 
 
 ## 행동마다 이동 속도가 얼마나 느려지는지
@@ -490,6 +529,8 @@ func _move_mult() -> float:
 			return 0.6
 		"charge":
 			return 0.5
+		"iron":
+			return 0.55
 		"stagger":
 			return 0.35 if _stun_kind != "flinch" else 0.6
 	return 1.0
@@ -499,10 +540,15 @@ func _can_act() -> bool:
 	return controls_enabled and not dead
 
 
+## 스킬 같은 바깥 코드가 기력을 쓸 때
+func spend_stamina(amount: float) -> void:
+	_use_stamina(amount)
+
+
 func _use_stamina(amount: float) -> void:
 	stamina = maxf(stamina - amount, 0.0)
 	_regen_wait = REGEN_DELAY
-	stamina_changed.emit(stamina, MAX_STAMINA)
+	stamina_changed.emit(stamina, max_stamina)
 
 
 ## 시작 전에 잔상과 칼 빛 효과를 한 번 그려 둔다 (첫 공격 때 멈칫하지 않도록).
@@ -581,7 +627,7 @@ func _dash_enter(d: Dictionary) -> void:
 
 func _dash_update(_delta: float) -> void:
 	var k := clampf(1.0 - sm.time / DASH_TIME, 0.0, 1.0)
-	var dv := _dash_dir * lerpf(WALK_SPEED, DASH_SPEED, k)
+	var dv := _dash_dir * lerpf(WALK_SPEED, DASH_SPEED * build.dash_mult(), k)
 	velocity.x = dv.x
 	velocity.z = dv.z
 	if sm.time >= DASH_TIME:
@@ -677,17 +723,18 @@ func _attack_enter(d: Dictionary) -> void:
 	var data: Dictionary = MoveSet.MOVES[_move]
 	_use_stamina(data.cost)
 	_attack_phase = "windup"
-	_attack_timer = data.windup
+	_attack_timer = data.windup * _atk_mult()
 	_queued = ""
 	_already_hit.clear()
-	_hit_info = {"move": _move, "react": data.react, "guard": data.guard, "damage": data.damage}
+	_hit_info = {"move": _move, "react": data.react, "guard": data.guard, "damage": data.damage,
+			"pressure": build.guard_pressure()}
 	if _move == "charge":
 		_hit_info.damage = MoveSet.charge_damage(_charge_level)
 		if not _charge_full:
 			_hit_info.guard = "normal"
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
-	_tween_pose(_weapon_tween, data.fp.windup, data.windup,
+	_tween_pose(_weapon_tween, data.fp.windup, data.windup * _atk_mult(),
 			Tween.TRANS_BACK if _move == "heavy" else Tween.TRANS_SINE)
 	attack_started.emit(_move)
 
@@ -714,11 +761,11 @@ func _attack_update(delta: float) -> void:
 			_check_hits(data)
 			if sm.state == "attack" and _attack_timer <= 0.0:
 				_attack_phase = "recover"
-				_attack_timer = data.recover
-				_tween_back(data.recover)
+				_attack_timer = data.recover * _atk_mult()
+				_tween_back(data.recover * _atk_mult())
 		"recover":
 			# 다음 공격이 예약돼 있으면 회복 동작 중간에 이어서 휘두른다.
-			if _queued != "" and _attack_timer <= data.recover * 0.55:
+			if _queued != "" and _attack_timer <= data.recover * _atk_mult() * 0.55:
 				var nxt := _queued
 				_queued = ""
 				_start_attack(nxt)
@@ -726,6 +773,11 @@ func _attack_update(delta: float) -> void:
 					return
 			if _attack_timer <= 0.0:
 				sm.go("free")
+
+
+## 기술 능력치와 질풍에 따른 공격 동작 시간 배율
+func _atk_mult() -> float:
+	return build.attack_time_mult() * skills.attack_mult()
 
 
 func _enter_active(data: Dictionary) -> void:
@@ -797,7 +849,7 @@ func _charge_exit() -> void:
 func _stagger_enter(d: Dictionary) -> void:
 	_stun_kind = d.kind
 	var r: Dictionary = MoveSet.REACTIONS[_stun_kind]
-	_stun_time = r.time
+	_stun_time = r.time * (build.stun_mult() if _stun_kind in ["flinch", "stagger", "guard_break"] else 1.0)
 	var from_dir: Vector3 = d.get("from", Vector3.ZERO)
 	if from_dir != Vector3.ZERO:
 		velocity += -from_dir.normalized() * float(r.push)
@@ -845,9 +897,16 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 	facing.y = 0
 	var in_front := facing.normalized().dot(to_attacker.normalized()) > 0.25
 	var damage: int = info.damage
+	if sm.state == "iron":
+		# 철벽: 어느 방향이든, 어떤 공격이든 막는다. 기력도 줄지 않는다.
+		_play("clang", 0.8)
+		Fx.sparks(get_parent(), _blade_tip.global_position, to_attacker.normalized(), 24, Color(1.0, 0.85, 0.4))
+		combat_event.emit("철벽!", Color(1.0, 0.85, 0.4))
+		_shake = 0.3
+		return "blocked"
 	if blocking and in_front and info.guard != "unblockable":
 		var contact := _blade_tip.global_position
-		if sm.time <= PARRY_WINDOW:
+		if sm.time <= build.parry_window():
 			_play("parry", 1.0, -1.0)
 			Fx.sparks(get_parent(), contact, to_attacker.normalized(), 40, Color(0.7, 0.9, 1.0))
 			combat_event.emit("튕겨내기!", Color(0.55, 0.85, 1.0))
@@ -860,7 +919,7 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 		if info.guard == "break":
 			stamina = 0.0
 		else:
-			_use_stamina(BLOCK_COST.get(info.react, 14.0))
+			_use_stamina(BLOCK_COST.get(info.react, 14.0) * float(info.get("pressure", 1.0)))
 		if stamina <= 0.0:
 			# 기력이 바닥나거나 막기를 깨는 공격이면 막기가 깨진다
 			_use_stamina(0.0)
@@ -877,7 +936,7 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 
 func _take_damage(amount: int, from_dir: Vector3) -> void:
 	hp = max(hp - amount, 0)
-	hp_changed.emit(hp, MAX_HP)
+	hp_changed.emit(hp, max_hp)
 	took_damage.emit(amount)
 	_play("hurt", 1.0, -2.0)
 	_shake = 0.7
@@ -920,7 +979,7 @@ func _check_hits(data: Dictionary) -> void:
 		to_target.y = 0
 		var hit_dir := to_target.normalized() if to_target.length() > 0.01 else fwd
 		var info := _hit_info.duplicate()
-		info.damage = int(info.damage) + randi_range(-2, 2)
+		info.damage = int(round(float(info.damage) * build.damage_mult())) + randi_range(-2, 2)
 		var result = body.take_hit(info, hit_dir, self)
 		var contact := _blade_tip.global_position
 		match result:
@@ -987,10 +1046,14 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 		target_fov = 92.0
 	elif sm.state == "climb":
 		target_fov = 82.0
+	elif sm.state == "grapple":
+		target_fov = 94.0
 	elif sm.state == "charge":
 		target_fov = 78.0 - _charge_level * 6.0
 	elif sprinting and horiz > WALK_SPEED:
 		target_fov = 86.0
+	if skills.haste_active():
+		target_fov += 4.0
 	camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 8.0, 0, 1))
 	# 칼도 걸음에 맞춰 살짝 흔들림
 	var tr := Vector3.ZERO
@@ -998,3 +1061,200 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 		var t := Time.get_ticks_msec() * 0.06
 		tr = Vector3(sin(t * 1.3), sin(t * 1.9), 0) * _tremble * 0.006
 	_weapon_root.position = WEAPON_REST + Vector3(bob.x * 0.5, -bob.y * 0.6, 0) + tr
+
+
+# ---------------- 특수 스킬 ----------------
+# 스킬 수치(쿨타임, 기력, 거리)는 scripts/character/character_build.gd 의 SKILLS 표에 있다.
+# 쿨타임과 기력 계산은 SkillKit 이 하고, 여기서는 몸을 움직인다.
+
+## E 는 첫 번째 스킬, R 은 두 번째 스킬. 늘 켜져 있는 스킬(벽타기, 이중 점프)이면 아무 일도 없다.
+func use_skill_slot(slot: int) -> void:
+	if slot < build.skills.size():
+		use_skill(build.skills[slot])
+
+
+func use_skill(skill: String) -> bool:
+	if not _can_act() or not CharacterBuild.SKILLS[skill].active:
+		return false
+	if sm.is_in(["stagger", "grapple", "iron"]):
+		return false
+	if not skills.can_use(skill):
+		if skills.cooldown_left(skill) > 0.0:
+			combat_event.emit("%s 준비 중 (%.0f초)" % [CharacterBuild.SKILLS[skill].name,
+					ceilf(skills.cooldown_left(skill))], Color(0.8, 0.8, 0.8))
+		else:
+			combat_event.emit("기력 부족", Color(0.9, 0.75, 0.5))
+		return false
+	match skill:
+		"blink":
+			skills.use(skill)
+			_do_blink()
+		"grapple":
+			var aim := _grapple_aim()
+			if aim.is_empty():
+				combat_event.emit("닿는 곳이 없다", Color(0.8, 0.8, 0.8))
+				return false
+			skills.use(skill)
+			_cancel_action()
+			sm.go("grapple", aim)
+		"haste":
+			skills.use(skill)
+			combat_event.emit("질풍!", Color(0.55, 1.0, 0.7))
+			_play("dash", 0.7, -4.0)
+			camera.fov += 6.0
+		"iron_guard":
+			skills.use(skill)
+			_cancel_action()
+			sm.go("iron")
+	return true
+
+
+## 하던 공격/모으기를 멈춘다 (스킬로 끊을 때)
+func _cancel_action() -> void:
+	if sm.is_in(["attack", "charge", "block", "climb", "wallrun"]):
+		_queued = ""
+		sm.go("free")
+		_pose_to(MoveSet.FP_POSES.rest, 0.1)
+
+
+# --- 점멸 ---
+
+func _do_blink() -> void:
+	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	if input == Vector2.ZERO:
+		input = Vector2(0, -1)   # 방향키가 없으면 앞으로
+	var dir := (transform.basis * Vector3(input.x, 0, input.y)).normalized()
+	blink_toward(dir)
+
+
+## dir 방향(수평)으로 순간이동. 벽이 있으면 벽 앞에서 멈춘다.
+func blink_toward(dir: Vector3) -> void:
+	_cancel_action()
+	var dist: float = CharacterBuild.SKILLS.blink.range
+	for h in [0.4, 1.0, 1.6]:
+		var hit := _cast(global_position + Vector3.UP * h, dir * dist)
+		if not hit.is_empty():
+			var hp_flat: Vector3 = hit.position - global_position
+			hp_flat.y = 0
+			dist = minf(dist, hp_flat.length() - 0.55)
+	dist = maxf(dist, 0.0)
+	var start := global_position + Vector3.UP * 1.0
+	global_position += dir * dist
+	velocity.x = dir.x * 7.0
+	velocity.z = dir.z * 7.0
+	velocity.y = maxf(velocity.y, 0.5)
+	# 순간이동하는 순간은 맞지 않는다. 아슬하게 피하면 반격 기회도 열린다.
+	_iframes = 0.3
+	_since_dash = 0.0
+	_counter_used = false
+	var c := Color(0.6, 0.75, 1.0)
+	Fx.sparks(get_parent(), start, -dir, 18, c)
+	Fx.sparks(get_parent(), global_position + Vector3.UP * 1.0, dir, 18, c)
+	camera.fov += 14.0
+	_roll = -signf(input_side(dir)) * deg_to_rad(6.0)
+	_play("dash", 1.6, -5.0)
+
+
+## dir 가 내 오른쪽이면 +, 왼쪽이면 -
+func input_side(dir: Vector3) -> float:
+	return transform.basis.x.dot(dir)
+
+
+# --- 갈고리 ---
+
+func _build_rope() -> void:
+	_rope = MeshInstance3D.new()
+	var m := BoxMesh.new()
+	m.size = Vector3(0.025, 0.025, 1.0)
+	_rope.mesh = m
+	_rope.material_override = LowPoly.mat(Color(0.35, 0.25, 0.15), 0.9)
+	_rope.top_level = true
+	_rope.visible = false
+	_rope.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_rope)
+
+
+## 조준점에 줄을 걸 수 있으면 {"point", "body"}, 아니면 {}
+func _grapple_aim() -> Dictionary:
+	var from := camera.global_position
+	var to := from - camera.global_transform.basis.z * float(CharacterBuild.SKILLS.grapple.range)
+	var q := PhysicsRayQueryParameters3D.create(from, to, 1 | 2, [get_rid()])
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		return {}
+	var body: Node3D = hit.collider if hit.collider is Duelist else null
+	if (hit.position as Vector3).distance_to(from) < 2.5:
+		return {}
+	return {"point": hit.position, "body": body}
+
+
+func _grapple_target() -> Vector3:
+	if _grap_body and is_instance_valid(_grap_body):
+		return _grap_body.global_position + Vector3.UP * 1.0
+	return _grap_point
+
+
+func _grapple_enter(d: Dictionary) -> void:
+	_grap_point = d.point
+	_grap_body = d.body
+	_rope.visible = true
+	_pose_to(MoveSet.FP_POSES.wallrun, 0.1)
+	_play("dash", 0.6, -4.0)
+	_update_rope()
+
+
+func _grapple_update(_delta: float) -> void:
+	var target := _grapple_target()
+	var to := target - (global_position + Vector3.UP * 1.0)
+	var dist := to.length()
+	var stop := 2.1 if _grap_body else 1.1
+	var spd: float = CharacterBuild.SKILLS.grapple.speed
+	var stalled := sm.time > 0.25 and get_real_velocity().length() < 2.0
+	if dist < stop or sm.time > 1.4 or stalled or (_can_act() and Input.is_action_just_pressed("jump")):
+		if _grap_body:
+			velocity = to.normalized() * 4.0
+		else:
+			# 끝에 닿으면 살짝 튀어 올라 지붕 모서리 위로 올라설 수 있게
+			var flat := Vector3(to.x, 0, to.z).normalized()
+			velocity = flat * 4.0 + Vector3.UP * 5.5
+		sm.go("free")
+		return
+	velocity = to / dist * spd
+
+
+func _grapple_exit() -> void:
+	_rope.visible = false
+	_pose_to(MoveSet.FP_POSES.rest, 0.15)
+
+
+func _update_rope() -> void:
+	if not _rope.visible:
+		return
+	var a := camera.global_transform * Vector3(0.25, -0.25, -0.4)
+	var b := _grapple_target()
+	var rope_len := a.distance_to(b)
+	if rope_len < 0.05:
+		return
+	_rope.global_transform = Transform3D(Basis.looking_at(b - a, Vector3.UP if absf((b - a).normalized().y) < 0.98 else Vector3.RIGHT), (a + b) * 0.5)
+	_rope.scale = Vector3(1, 1, rope_len)
+
+
+# --- 철벽 ---
+
+func _iron_enter(_d: Dictionary) -> void:
+	_pose_to(MoveSet.FP_POSES.block, 0.06)
+	_blade_mat.emission = Color(1.0, 0.85, 0.4)
+	_blade_mat.emission_energy_multiplier = 1.6
+	combat_event.emit("철벽!", Color(1.0, 0.85, 0.4))
+	_play("charged", 0.8, -4.0)
+
+
+func _iron_update(_delta: float) -> void:
+	if sm.time >= float(CharacterBuild.SKILLS.iron_guard.duration):
+		sm.go("free")
+
+
+func _iron_exit() -> void:
+	_blade_mat.emission = Color(1.0, 0.72, 0.3)
+	_blade_mat.emission_energy_multiplier = 0.0
+	_pose_to(MoveSet.FP_POSES.rest, 0.15)

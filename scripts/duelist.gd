@@ -13,6 +13,7 @@ extends CharacterBody3D
 signal hp_changed(value: int, max_value: int)
 signal combat_event(text: String, color: Color)
 signal died
+signal stamina_changed(value: float, max_value: float)
 
 const MAX_HP := 100
 const MOVE_SPEED := 3.9
@@ -22,6 +23,10 @@ const WINDUP_TURN_SPEED := 2.0  # 공격 준비 중에는 느리게 돈다 → �
 const HIT_ANGLE := 0.55         # 칼이 닿는 앞쪽 범위 (cos 값)
 const DASH_TIME := 0.24
 const DASH_IFRAMES := 0.22
+const DASH_COST := 16.0
+const STAMINA_REGEN := 30.0
+const REGEN_DELAY := 0.8
+const BLOCK_COST := {"flinch": 12.0, "stagger": 26.0}
 
 # 성격 (나중에 난이도나 '거울' 모드에서 바꿀 수 있다)
 var aggression := 0.55
@@ -33,11 +38,19 @@ var counter_chance := 0.65      # 막아낸 뒤 바로 반격
 var combo_chance := 0.55        # 연속 베기를 이어갈 확률
 var charge_chance := 0.18       # 거리가 벌어졌을 때 차지 베기
 var stats := {}   # 점검용 기록: 받은 공격 결과, 한 행동 횟수
-## 쓸 수 있는 이동 기술 (플레이어와 같은 이름). 벽을 못 타면 계단과 경사로로만 올라간다.
+## 쓸 수 있는 이동 기술 (플레이어와 같은 이름). 빌드의 '벽타기' 스킬로 켜진다.
+## 벽을 못 타면 계단과 경사로로만 올라간다.
 var traits := {"wall_climb": true}
 var arena: Arena                # 길찾기 (없으면 곧장 다가간다)
+## 이 AI 의 캐릭터 (능력치, 특수 스킬). 플레이어와 같은 규칙. 씬에 넣기 전에 정한다.
+var build: CharacterBuild
+var skills: SkillKit
 
+var max_hp := MAX_HP
 var hp := MAX_HP
+var max_stamina := 100.0
+var stamina := 100.0
+var _regen_wait := 0.0
 var active := false
 var dead := false
 var target: Player
@@ -79,6 +92,10 @@ var _climb_dir := Vector3.ZERO
 var _stuck_t := 0.0
 var _stuck_pos := Vector3.ZERO
 var _ray := PhysicsRayQueryParameters3D.new()
+var _dj_pending := false        # 점프 꼭대기에서 이중 점프
+var _grap_point := Vector3.ZERO
+var _grap_on_target := false
+var _rope: MeshInstance3D
 
 var rig: BodyRig
 var _audio: AudioStreamPlayer3D
@@ -86,6 +103,14 @@ var _sounds := {}
 
 
 func _ready() -> void:
+	if build == null:
+		build = CharacterBuild.preset("검객")
+	max_hp = build.max_hp()
+	hp = max_hp
+	max_stamina = build.max_stamina()
+	stamina = max_stamina
+	traits = {"wall_climb": build.has("wall")}
+	skills = SkillKit.new(self, build)
 	collision_layer = 2
 	collision_mask = 1
 	var col := CollisionShape3D.new()
@@ -120,8 +145,11 @@ func _ready() -> void:
 		.add("dash", _dash_enter, _dash_update) \
 		.add("stagger", _stagger_enter, _stagger_update) \
 		.add("climb", _climb_enter, _climb_update) \
+		.add("grapple", _grapple_enter, _grapple_update, _grapple_exit) \
+		.add("iron", _iron_enter, _iron_update, _iron_exit) \
 		.add("dead")
 	_ray.collision_mask = 1
+	_build_rope()
 	sm.changed.connect(func(_a, b): stats[b] = stats.get(b, 0) + 1)
 	sm.go("idle")
 
@@ -140,8 +168,16 @@ var _turn_speed := TURN_SPEED
 
 
 func _physics_process(delta: float) -> void:
-	if not is_on_floor() and state != "climb":
+	if not is_on_floor() and state not in ["climb", "grapple"]:
 		velocity.y -= _gravity * delta
+	if is_on_floor():
+		skills.landed()
+	elif _dj_pending and velocity.y < 1.0:
+		_dj_pending = false
+		if skills.try_double_jump(5.6):
+			_play("dash", -10.0)
+	skills.tick(delta)
+	_regen(delta)
 	_alert = maxf(_alert - delta, 0.0)
 	_iframes = maxf(_iframes - delta, 0.0)
 	_hits_reset -= delta
@@ -174,8 +210,33 @@ func _physics_process(delta: float) -> void:
 	move_and_slide()
 
 
+func _regen(delta: float) -> void:
+	if _regen_wait > 0.0:
+		_regen_wait -= delta
+	elif stamina < max_stamina:
+		var r := STAMINA_REGEN * build.regen_mult() * skills.regen_mult() * (0.5 if state in ["block", "iron"] else 1.0)
+		stamina = minf(stamina + r * delta, max_stamina)
+		stamina_changed.emit(stamina, max_stamina)
+
+
+func spend_stamina(amount: float) -> void:
+	stamina = maxf(stamina - amount, 0.0)
+	_regen_wait = REGEN_DELAY
+	stamina_changed.emit(stamina, max_stamina)
+
+
+## 능력치와 질풍을 반영한 걷는 빠르기
+func _speed() -> float:
+	return MOVE_SPEED * build.speed_mult() * skills.speed_mult()
+
+
+func _atk_mult() -> float:
+	return build.attack_time_mult() * skills.attack_mult()
+
+
 func _process(delta: float) -> void:
 	rig.animate(delta, global_transform.basis.inverse() * Vector3(velocity.x, 0, velocity.z))
+	_update_rope()
 
 
 # ---------------- 판단 ----------------
@@ -183,8 +244,24 @@ func _process(delta: float) -> void:
 func _think() -> void:
 	_think_t = randf_range(0.18, 0.35)
 	if not _direct:
-		# 상대가 다른 층(지붕, 기둥 위)에 있으면 길을 찾아 올라간다
+		# 상대가 다른 층(지붕, 기둥 위)에 있으면: 갈고리가 있으면 줄을 걸어 날아가고, 아니면 길을 찾아 올라간다
+		if _dy > 1.5 and _try_grapple_to_target():
+			return
 		sm.go("approach")
+		return
+	if _think_skills():
+		return
+	if target.sm.state == "iron":
+		# 상대가 철벽 중이면 때려 봐야 소용없다: 거리를 두고 돈다
+		sm.go("circle")
+		_strafe_dir = -1.0 if randf() < 0.5 else 1.0
+		_think_t = 0.4
+		return
+	if stamina < 22.0:
+		# 기력이 바닥났다: 물러나서 숨을 고른다
+		sm.go("circle")
+		_strafe_dir = -1.0 if randf() < 0.5 else 1.0
+		_think_t = randf_range(0.5, 0.9)
 		return
 	var r := randf()
 	# 거리가 좀 벌어졌으면 가끔 차지 베기로 돌진
@@ -235,6 +312,13 @@ func on_target_attack(kind: String) -> void:
 		dodge += block * 0.6
 		block *= 0.4
 	var r := randf()
+	# 특수 스킬로 받아치기: 큰 공격엔 철벽이나 점멸
+	if big and skills.can_use("iron_guard") and randf() < 0.65:
+		_use_iron()
+		return
+	if skills.can_use("blink") and randf() < (0.6 if big else 0.18):
+		_blink_dodge()
+		return
 	if r < block:
 		_enter_block()
 	elif r < block + dodge:
@@ -251,6 +335,12 @@ func on_target_charge() -> void:
 	if not _can_react():
 		return
 	var dist := global_position.distance_to(target.global_position)
+	if dist < 3.6 and skills.can_use("iron_guard") and randf() < 0.5:
+		_use_iron()
+		return
+	if dist < 3.6 and skills.can_use("blink") and randf() < 0.5:
+		_blink_dodge()
+		return
 	if dist < 3.4 and randf() < aggression:
 		_combo_left = 0
 		_start_attack("slash1")
@@ -282,13 +372,18 @@ func _neutral_update(delta: float) -> void:
 	_path.clear()
 	var side := Vector3(-_dir.z, 0, _dir.x)
 	if state == "approach":
-		_move = _dir * MOVE_SPEED if _dist > 2.0 else Vector3.ZERO
+		_move = _dir * _speed() if _dist > 2.0 else Vector3.ZERO
 	else:
 		var keep := (_dist - 2.6) * 1.5
-		_move = side * _strafe_dir * STRAFE_SPEED + _dir * keep
+		if stamina < 22.0:
+			keep = (_dist - 4.0) * 1.5   # 숨 고르는 중엔 멀찍이
+		_move = side * _strafe_dir * STRAFE_SPEED * build.speed_mult() + _dir * keep
 
 
 func _start_attack(kind: String) -> void:
+	if stamina < float(MoveSet.MOVES[kind].cost) * 0.5:
+		_back_to_neutral()
+		return
 	_attack = kind
 	stats["move_" + kind] = stats.get("move_" + kind, 0) + 1
 	sm.go("windup")
@@ -297,9 +392,10 @@ func _start_attack(kind: String) -> void:
 func _windup_enter(_d: Dictionary) -> void:
 	_hit_done = false
 	var data: Dictionary = MoveSet.MOVES[_attack]
+	spend_stamina(float(data.cost))
 	# 자꾸 피하면 일부러 한 박자 늦게 휘두르기도 한다
-	_windup_len = data.ai_windup + randf() * 0.12 * mini(_dodged_by_target, 3)
-	rig.set_pose(data.body.windup, 2.5 / data.ai_windup)
+	_windup_len = data.ai_windup * _atk_mult() + randf() * 0.12 * mini(_dodged_by_target, 3)
+	rig.set_pose(data.body.windup, 2.5 / (data.ai_windup * _atk_mult()))
 	var col := Color(1.0, 0.55, 0.1)
 	if data.warn == "heavy":
 		col = Color(1.0, 0.15, 0.1)
@@ -312,7 +408,7 @@ func _windup_enter(_d: Dictionary) -> void:
 func _windup_update(_delta: float) -> void:
 	var data: Dictionary = MoveSet.MOVES[_attack]
 	_turn_speed = WINDUP_TURN_SPEED
-	var k := clampf(_state_t / data.ai_windup, 0.0, 1.0)
+	var k := clampf(_state_t / (data.ai_windup * _atk_mult()), 0.0, 1.0)
 	rig.glow(rig.blade_mat.emission, k * k * 3.5)
 	if _attack == "charge":
 		# 힘을 모으며 천천히 다가온다
@@ -354,10 +450,11 @@ func _recover_update(delta: float) -> void:
 	_turn_speed = 3.0
 	rig.glow(rig.blade_mat.emission, move_toward(rig.glow_energy(), 0.0, delta * 10.0))
 	var nxt: String = data.next
-	if _combo_left > 0 and nxt != "" and _state_t >= data.ai_recover * 0.35 and _dist < float(data.reach) + 0.9:
+	var rec: float = data.ai_recover * _atk_mult()
+	if _combo_left > 0 and nxt != "" and _state_t >= rec * 0.35 and _dist < float(data.reach) + 0.9:
 		_combo_left -= 1
 		_start_attack(nxt)
-	elif _state_t >= data.ai_recover:
+	elif _state_t >= rec:
 		_combo_left = 0
 		_back_to_neutral()
 
@@ -379,14 +476,20 @@ func _block_update(_delta: float) -> void:
 
 ## back: 앞(+)/뒤(-) 비율, side: 옆 비율
 func _dash_dir(back: float, side_amt: float) -> void:
+	if stamina < DASH_COST * 0.5:
+		# 기력이 없어 대시를 못 한다: 대신 막는다
+		_enter_block()
+		return
 	var side := Vector3(-_dir.z, 0, _dir.x) * (1.0 if randf() < 0.5 else -1.0)
 	sm.go("dash", {"vec": (_dir * back + side * side_amt).normalized()})
 
 
 func _dash_enter(d: Dictionary) -> void:
 	var v: Vector3 = d.vec
-	_push = v * 11.0
+	_push = v * 11.0 * build.dash_mult()
 	_iframes = DASH_IFRAMES
+	if v.length() > 0.5:
+		spend_stamina(DASH_COST)
 	_counter_ready = false
 	rig.set_pose(MoveSet.BODY_POSES.guard, 12.0)
 	rig.dash_pulse(global_transform.basis.inverse() * v)
@@ -422,7 +525,7 @@ func _stagger_update(_delta: float) -> void:
 
 
 func _stagger(t: float, big: bool = true) -> void:
-	sm.go("stagger", {"time": t, "big": big})
+	sm.go("stagger", {"time": t * build.stun_mult(), "big": big})
 
 
 # ---------------- 길찾기와 벽 오르기 ----------------
@@ -447,6 +550,9 @@ func _nav_move(delta: float) -> Vector3:
 	if _repath_t <= 0.0 or _path_i >= _path.size():
 		_repath_t = 0.6
 		_path = arena.find_path(global_position, target.global_position, traits.get("wall_climb", false))
+		# 길이 너무 멀면 갈고리로 지름길
+		if _path.size() > 6 and _try_grapple_to_target():
+			return Vector3.ZERO
 		_path_i = 1 if _path.size() > 1 else 0
 	if _path.is_empty():
 		# 갈 길이 없다 (벽을 못 타는데 상대가 기둥 위에 있다 등): 아래에서 기다리며 맴돈다
@@ -478,7 +584,8 @@ func _nav_move(delta: float) -> Vector3:
 		"jump":
 			if dy > 0.4 and hd < 2.2 and is_on_floor():
 				velocity.y = 6.3
-	return dir * MOVE_SPEED * (1.15 if not _direct else 1.0)
+				_dj_pending = skills.has("double_jump") and dy > 1.4
+	return dir * _speed() * (1.15 if not _direct else 1.0)
 
 
 ## 오래 제자리면 (모서리에 걸림) 한 번 뛰고 길을 다시 찾는다
@@ -535,8 +642,8 @@ func _try_hit(data: Dictionary) -> void:
 		return
 	_hit_done = true
 	var info := {
-		"move": _attack, "damage": int(data.damage) + randi_range(-2, 2),
-		"react": data.react, "guard": data.get("ai_guard", data.guard),
+		"move": _attack, "damage": int(round(float(data.damage) * build.damage_mult())) + randi_range(-2, 2),
+		"react": data.react, "guard": data.get("ai_guard", data.guard), "pressure": build.guard_pressure(),
 	}
 	var result := target.receive_attack(info, self)
 	match result:
@@ -573,11 +680,18 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 		_counter_ready = true
 		combat_event.emit("상대가 피했다!", Color(1.0, 0.7, 0.4))
 		return "dodged"
+	if state == "iron":
+		# 철벽: 어떤 공격이든 막는다. 기력도 줄지 않는다.
+		_play("clang", -1.0)
+		combat_event.emit("상대 철벽!", Color(1.0, 0.85, 0.4))
+		_push = dir * 1.5
+		return "blocked"
 	var facing := -global_transform.basis.z
 	facing.y = 0
 	var facing_attacker := facing.normalized().dot(-dir) > 0.2
 	if state == "block" and facing_attacker and info.guard != "unblockable":
-		if _state_t < 0.3 and randf() < parry_chance:
+		var parry := parry_chance * (1.0 + 0.12 * (float(build.stats.tec) - 5.0))
+		if _state_t < 0.3 and randf() < parry:
 			_play("parry")
 			# 튕겨낸 뒤 바로 반격
 			_combo_left = 0
@@ -594,6 +708,14 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 			return "hit"
 		_play("clang", -2.0)
 		_push = dir * (4.0 if big else 2.0)
+		spend_stamina(float(BLOCK_COST.get(info.react, 12.0)) * float(info.get("pressure", 1.0)))
+		if stamina <= 0.0:
+			# 기력이 바닥나 막기가 깨졌다
+			combat_event.emit("가드 깨기!", Color(1.0, 0.75, 0.3))
+			_apply_damage(damage / 2, dir, true)
+			if not dead:
+				_stagger(MoveSet.REACTIONS.guard_break.time)
+			return "hit"
 		if randf() < counter_chance:
 			# 막아낸 뒤 상대가 튕겨난 틈에 바로 반격
 			_combo_left = 0
@@ -624,7 +746,7 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 
 func _apply_damage(damage: int, dir: Vector3, big: bool) -> void:
 	hp = max(hp - damage, 0)
-	hp_changed.emit(hp, MAX_HP)
+	hp_changed.emit(hp, max_hp)
 	_alert = 2.0
 	var r: Dictionary = MoveSet.REACTIONS["stagger" if big else "flinch"]
 	_push = dir * float(r.push)
@@ -680,3 +802,188 @@ func warmup(pos: Vector3) -> void:
 		get_parent().add_child(label)
 		label.global_position = pos
 		get_tree().create_timer(0.3, false).timeout.connect(label.queue_free)
+
+
+# ---------------- 특수 스킬 (플레이어와 같은 규칙, 같은 쿨타임) ----------------
+
+func _announce(skill: String) -> void:
+	combat_event.emit("상대 %s!" % CharacterBuild.SKILLS[skill].name, Color(1.0, 0.6, 0.45))
+	stats["skill_" + skill] = stats.get("skill_" + skill, 0) + 1
+
+
+## 평소 판단할 때 쓸 만한 스킬이 있으면 쓰고 true
+func _think_skills() -> bool:
+	# 질풍: 멀리서 다가갈 때, 또는 상대가 약해졌을 때 몰아치기
+	if skills.can_use("haste") and (_dist > 6.0 or (target.hp < target.max_hp * 0.45 and _dist < 4.0)) \
+			and randf() < 0.6:
+		skills.use("haste")
+		_announce("haste")
+		rig.glow(Color(0.5, 1.0, 0.7), 1.2)
+	# 점멸: 멀리 있으면 순간이동으로 붙어서 바로 벤다
+	if skills.can_use("blink") and _dist > 6.0 and _dist < 11.0 and randf() < 0.5:
+		var reach := _dist - 2.2
+		_blink(_dir, reach)
+		_combo_left = 1 if randf() < combo_chance else 0
+		_start_attack("slash1")
+		return true
+	# 갈고리: 멀리 있으면 줄을 걸어 날아간다
+	if _dist > 8.0 and _try_grapple_to_target():
+		return true
+	# 체력이 낮은데 상대가 몰아치면 철벽
+	if skills.can_use("iron_guard") and hp < max_hp * 0.4 and target.is_attacking() and _dist < 3.0:
+		_use_iron()
+		return true
+	return false
+
+
+# --- 점멸 ---
+
+## dir 방향으로 최대 dist 만큼 순간이동 (벽 앞에서 멈춤)
+func _blink(dir: Vector3, dist: float) -> void:
+	if not skills.use("blink"):
+		return
+	dist = minf(dist, float(CharacterBuild.SKILLS.blink.range))
+	_ray.exclude = [get_rid(), target.get_rid()]
+	for h in [0.4, 1.0, 1.6]:
+		_ray.from = global_position + Vector3.UP * h
+		_ray.to = _ray.from + dir * dist
+		var hit := get_world_3d().direct_space_state.intersect_ray(_ray)
+		if not hit.is_empty():
+			var flat: Vector3 = hit.position - global_position
+			flat.y = 0
+			dist = minf(dist, flat.length() - 0.6)
+	dist = maxf(dist, 0.0)
+	var c := Color(1.0, 0.55, 0.4)
+	Fx.sparks(get_parent(), global_position + Vector3.UP, -dir, 18, c)
+	global_position += dir * dist
+	Fx.sparks(get_parent(), global_position + Vector3.UP, dir, 18, c)
+	_iframes = 0.3
+	_play("dash", -3.0)
+	_announce("blink")
+
+
+## 상대 공격을 점멸로 옆이나 뒤로 피하고, 바로 반격한다
+func _blink_dodge() -> void:
+	var side := Vector3(-_dir.z, 0, _dir.x) * (1.0 if randf() < 0.5 else -1.0)
+	var dir := (side + _dir * (0.6 if randf() < 0.5 else -0.4)).normalized()
+	_blink(dir, 4.0)
+	# 짧은 대시 상태로 넘어가서, 끝나면 반격
+	sm.go("dash", {"vec": dir * 0.2})
+	_counter_ready = true
+
+
+# --- 갈고리 ---
+
+func _build_rope() -> void:
+	_rope = MeshInstance3D.new()
+	var m := BoxMesh.new()
+	m.size = Vector3(0.03, 0.03, 1.0)
+	_rope.mesh = m
+	_rope.material_override = LowPoly.mat(Color(0.35, 0.25, 0.15), 0.9)
+	_rope.top_level = true
+	_rope.visible = false
+	_rope.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(_rope)
+
+
+## 상대가 보이고 줄이 닿으면 상대 쪽으로 날아간다
+func _try_grapple_to_target() -> bool:
+	if not skills.can_use("grapple"):
+		return false
+	var from := global_position + Vector3.UP * 1.5
+	var to := target.global_position + Vector3.UP * 0.4
+	if from.distance_to(to) > float(CharacterBuild.SKILLS.grapple.range) or from.distance_to(to) < 4.0:
+		return false
+	_ray.from = from
+	_ray.to = to
+	_ray.exclude = [get_rid(), target.get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(_ray)
+	var point := to
+	if not hit.is_empty():
+		# 상대가 지붕 위에 있으면 지붕 모서리에 걸린다. 모서리가 상대 가까이일 때만 쓴다.
+		point = hit.position
+		if point.distance_to(to) > 3.5:
+			return false
+	skills.use("grapple")
+	_announce("grapple")
+	sm.go("grapple", {"point": point, "on_target": hit.is_empty()})
+	return true
+
+
+func _grapple_enter(d: Dictionary) -> void:
+	_grap_point = d.point
+	_grap_on_target = d.on_target
+	_rope.visible = true
+	rig.set_pose(MoveSet.BODY_POSES.climb, 12.0)
+	rig.glow(rig.blade_mat.emission, 0.0)
+	_play("dash", -4.0)
+
+
+func _grapple_target() -> Vector3:
+	return target.global_position + Vector3.UP * 0.8 if _grap_on_target else _grap_point
+
+
+func _grapple_update(_delta: float) -> void:
+	var tgt := _grapple_target()
+	var to := tgt - (global_position + Vector3.UP * 1.0)
+	var d := to.length()
+	_face = Vector3(to.x, 0, to.z).normalized()
+	var stalled := _state_t > 0.3 and get_real_velocity().length() < 2.0
+	if d < (2.3 if _grap_on_target else 1.1) or _state_t > 1.5 or stalled:
+		var flat := Vector3(to.x, 0, to.z).normalized()
+		velocity = flat * 3.0 + Vector3.UP * (2.0 if _grap_on_target else 5.5)
+		_push = flat * 3.0
+		_repath_t = 0.0
+		_direct_t = 0.0
+		_back_to_neutral()
+		sm.go("approach")
+		return
+	var v := to / d * float(CharacterBuild.SKILLS.grapple.speed) * 0.85
+	_move = Vector3(v.x, 0, v.z)
+	velocity = v
+
+
+func _grapple_exit() -> void:
+	_rope.visible = false
+
+
+func _update_rope() -> void:
+	if not _rope.visible:
+		return
+	var a := global_position + Vector3.UP * 1.5
+	var b := _grapple_target()
+	var rope_len := a.distance_to(b)
+	if rope_len < 0.05:
+		return
+	var up := Vector3.UP if absf((b - a).normalized().y) < 0.98 else Vector3.RIGHT
+	_rope.global_transform = Transform3D(Basis.looking_at(b - a, up), (a + b) * 0.5)
+	_rope.scale = Vector3(1, 1, rope_len)
+
+
+# --- 철벽 ---
+
+func _use_iron() -> void:
+	if not skills.use("iron_guard"):
+		return
+	_announce("iron_guard")
+	sm.go("iron")
+
+
+func _iron_enter(_d: Dictionary) -> void:
+	rig.set_pose(MoveSet.BODY_POSES.block, 22.0)
+	rig.glow(Color(1.0, 0.85, 0.35), 2.5)
+
+
+func _iron_update(_delta: float) -> void:
+	_move = -_dir * 0.5 if _dist < 2.0 else Vector3.ZERO
+	if _state_t >= float(CharacterBuild.SKILLS.iron_guard.duration):
+		# 버틴 뒤 바로 반격
+		if _dist < 3.0:
+			_combo_left = 1
+			_start_attack("slash1")
+		else:
+			_back_to_neutral()
+
+
+func _iron_exit() -> void:
+	rig.glow(rig.blade_mat.emission, 0.0)
