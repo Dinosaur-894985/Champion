@@ -134,6 +134,17 @@ func _duel_step() -> void:
 	_autopilot(player, ai)
 	if _frame % 90 == 0:
 		_shot("d_%04d" % _frame)
+	# 새 동작이 처음 나올 때 한 장씩
+	if player.counter_ready():
+		_shot_once("e_counter_window")
+	if ai.state == "windup" and ai._attack == "charge" and ai._state_t > 0.7:
+		_shot_once("e_ai_charge")
+	if ai.state == "windup" and ai._attack == "slash3":
+		_shot_once("e_ai_combo3")
+	if ai.state == "stagger" and ai._state_t > 0.1:
+		_shot_once("e_ai_stagger")
+	if player.sm.state == "stagger" and player._stun_kind == "stagger":
+		_shot_once("e_player_stagger")
 
 
 ## 아주 단순한 자동 조종: 상대를 바라보고, 칼이 빛나면 막고, 빈틈에 벤다.
@@ -240,6 +251,16 @@ func _finish_duel(player: Player, ai: Duelist) -> void:
 	print("SMOKE => %s %s" % ["OK" if _fail.is_empty() else "FAIL", _fail])
 	_phase = "done"
 	quit(0 if _fail.is_empty() else 1)
+
+
+var _shot_done := {}
+
+
+func _shot_once(shot_name: String) -> void:
+	if _shot_done.has(shot_name):
+		return
+	_shot_done[shot_name] = true
+	_shot(shot_name)
 
 
 func _shot(shot_name: String) -> void:

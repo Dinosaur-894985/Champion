@@ -15,7 +15,7 @@ extends RefCounted
 ##   body                      : 3인칭 몸 자세 [어깨, 손목, 허리 비틀기, 숙이기] — windup 과 strike
 
 const MOVES := {
-	# ---- 연속 베기 (왼쪽 클릭 연타): 오른쪽→왼쪽, 왼쪽→오른쪽, 크게 한 바퀴 ----
+	# ---- 연속 베기 (왼쪽 클릭 연타): 왼쪽→오른쪽, 오른쪽→왼쪽, 크게 휩쓸기 ----
 	"slash1": {
 		"windup": 0.14, "active": 0.10, "recover": 0.26, "ai_windup": 0.45, "ai_recover": 0.45,
 		"damage": 11, "cost": 9.0, "reach": 2.3, "lunge": 1.5,
@@ -59,8 +59,8 @@ const MOVES := {
 		"windup": 0.9, "active": 0.14, "recover": 0.42, "ai_windup": 1.15, "ai_recover": 0.8,
 		"damage": 18, "damage_max": 36, "cost": 22.0, "reach": 2.8, "lunge": 7.0,
 		"react": "stagger", "guard": "break", "next": "", "warn": "heavy",
-		"fp": {"windup": [Vector3(30, -80, -65), Vector3(-0.2, 0.12, 0.25)],
-				"strike": [Vector3(-55, 95, 75), Vector3(0.38, -0.18, -0.22)]},
+		"fp": {"windup": [Vector3(20, 60, 20), Vector3(0.15, 0.1, 0.15)],
+				"strike": [Vector3(-45, -100, -70), Vector3(-0.38, -0.15, -0.2)]},
 		"body": {"windup": [Vector3(120, -110, 0), Vector3(0, 45, 0), -0.85, -0.1],
 				"strike": [Vector3(70, 80, 0), Vector3(0, 45, 0), 0.75, 0.4]},
 	},
