@@ -1,5 +1,5 @@
 extends ColorRect
-## 캐릭터 만들기 화면: 점수를 능력치 5개에 나눠 주고, 특수 스킬을 2개까지 고른다.
+## 캐릭터 만들기 화면: 무기를 고르고, 점수를 능력치 5개에 나눠 주고, 특수 스킬을 2개까지 고른다.
 ## 저장하면 user://build.cfg 에 남아서 다음에 켜도 그대로다.
 
 signal finished(saved: bool)
@@ -12,6 +12,8 @@ var build: CharacterBuild
 var _points: Label
 var _rows := {}           # 능력치 → {"pips": [ColorRect], "value": Label, "minus": Button, "plus": Button}
 var _skill_buttons := {}  # 스킬 → Button
+var _weapon_buttons := {} # 무기 → Button
+var _weapon_desc: Label
 var _desc: Label
 var _preview: Label
 
@@ -41,6 +43,29 @@ func _ready() -> void:
 	_points = _label("", 26)
 	_points.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(_points)
+
+	# ---- 무기 (점수를 먹지 않는다) ----
+	var wrow := HBoxContainer.new()
+	wrow.alignment = BoxContainer.ALIGNMENT_CENTER
+	wrow.add_theme_constant_override("separation", 10)
+	var wl := _label("무기", 22)
+	wl.custom_minimum_size = Vector2(60, 0)
+	wrow.add_child(wl)
+	for w in Weapons.ORDER:
+		var wb := Button.new()
+		wb.toggle_mode = true
+		wb.custom_minimum_size = Vector2(170, 48)
+		wb.add_theme_font_size_override("font_size", 20)
+		wb.text = Weapons.display_name(w)
+		wb.pressed.connect(_on_weapon.bind(w))
+		wrow.add_child(wb)
+		_weapon_buttons[w] = wb
+	box.add_child(wrow)
+	_weapon_desc = _label("", 16)
+	_weapon_desc.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_weapon_desc.modulate = Color(0.75, 0.9, 1.0)
+	_weapon_desc.custom_minimum_size = Vector2(0, 44)
+	box.add_child(_weapon_desc)
 
 	# ---- 능력치 ----
 	for k in CharacterBuild.STAT_ORDER:
@@ -137,6 +162,11 @@ func _change(k: String, amount: int) -> void:
 	_refresh()
 
 
+func _on_weapon(w: String) -> void:
+	build.weapon = w
+	_refresh()
+
+
 func _on_skill(s: String) -> void:
 	if not build.toggle_skill(s):
 		_desc.text = "스킬은 %d개까지예요. 하나를 먼저 빼세요." % CharacterBuild.MAX_SKILLS
@@ -173,6 +203,12 @@ func _refresh() -> void:
 		r.value.text = str(v)
 		r.minus.disabled = not build.can_lower(k)
 		r.plus.disabled = not build.can_raise(k)
+	for w in _weapon_buttons:
+		var wb: Button = _weapon_buttons[w]
+		wb.set_pressed_no_signal(build.weapon == w)
+		wb.modulate = Color(1.0, 0.85, 0.5) if build.weapon == w else Color(1, 1, 1)
+	var wd := Weapons.get_weapon(build.weapon)
+	_weapon_desc.text = "%s\n필살기 (V)  %s: %s" % [wd.desc, wd.special.name, wd.special.desc]
 	for s in _skill_buttons:
 		var b: Button = _skill_buttons[s]
 		b.set_pressed_no_signal(build.has(s))

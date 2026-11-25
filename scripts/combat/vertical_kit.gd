@@ -94,11 +94,16 @@ func knock(time: float = KNOCK_TIME) -> void:
 ## 맞은 공격이 날려 보내는 공격이면 [수평 힘, 위 힘], 아니면 ZERO
 static func launch_for(info: Dictionary) -> Vector2:
 	var mv: String = info.get("move", "")
-	if not LAUNCH.has(mv):
-		return Vector2.ZERO
-	var v: Vector2 = LAUNCH[mv]
+	var v: Vector2 = LAUNCH.get(mv, Vector2.ZERO)
 	if mv == "charge" and info.get("guard", "") != "break":
 		v *= 0.55   # 끝까지 모으지 않은 차지 베기는 조금만
+	# 무기 필살기는 날려 보내는 힘을 직접 정한다. 무기 동작은 더 세게 밀 수 있다 (Weapons 표)
+	if float(info.get("push", 0.0)) > 0.0:
+		v = Vector2(float(info.push), float(info.get("lift", 2.0)))
+	elif float(info.get("push_add", 0.0)) > 0.0:
+		v += Vector2(float(info.push_add), float(info.push_add) * 0.35)
+	if v == Vector2.ZERO:
+		return v
 	if info.get("power", false):
 		v *= float(PICKUPS.power.launch)
 	return v

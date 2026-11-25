@@ -52,6 +52,11 @@ var arena: Arena                # 길찾기 (없으면 곧장 다가간다)
 ## 이 AI 의 캐릭터 (능력치, 특수 스킬). 플레이어와 같은 규칙. 씬에 넣기 전에 정한다.
 var build: CharacterBuild
 var skills: SkillKit
+## 들고 있는 무기 (Weapons.WEAPONS). 빌드에서 정해진다.
+var weapon := "sword"
+## 필살기 게이지. 다 차면 좋은 때를 골라 필살기를 쓴다.
+var gauge := 0.0
+signal gauge_changed(value: float, max_value: float)
 
 var max_hp := MAX_HP
 var hp := MAX_HP
@@ -121,6 +126,7 @@ func _ready() -> void:
 	max_stamina = build.max_stamina()
 	stamina = max_stamina
 	traits = {"wall_climb": build.has("wall")}
+	weapon = Weapons.valid(build.weapon)
 	skills = SkillKit.new(self, build)
 	vkit = VerticalKit.new(self)
 	# 기술 능력치가 높을수록 상대 공격 방향을 잘 읽는다
@@ -135,6 +141,7 @@ func _ready() -> void:
 	col.position.y = 0.925
 	add_child(col)
 	rig = BodyRig.new()
+	rig.weapon = weapon
 	add_child(rig)
 	_audio = AudioStreamPlayer3D.new()
 	_audio.unit_size = 8.0
@@ -195,6 +202,8 @@ func _physics_process(delta: float) -> void:
 			_play("dash", -10.0)
 	skills.tick(delta)
 	_regen(delta)
+	if active and not dead:
+		add_gauge(Weapons.GAUGE.regen * delta)
 	_alert = maxf(_alert - delta, 0.0)
 	_iframes = maxf(_iframes - delta, 0.0)
 	_thrown_t = maxf(_thrown_t - delta, 0.0)
@@ -251,7 +260,17 @@ func spend_stamina(amount: float) -> void:
 
 ## 능력치와 질풍을 반영한 걷는 빠르기
 func _speed() -> float:
-	return MOVE_SPEED * build.speed_mult() * skills.speed_mult()
+	return MOVE_SPEED * build.speed_mult() * skills.speed_mult() * Weapons.stat(weapon, "speed")
+
+
+## 내 무기에 맞춘 동작 값 (Weapons.move)
+func _mv(move_name: String) -> Dictionary:
+	return Weapons.move(weapon, move_name)
+
+
+## 무기 버릇 (Weapons.WEAPONS[무기].ai)
+func _style(key: String) -> float:
+	return Weapons.ai(weapon, key)
 
 
 func _atk_mult() -> float:
@@ -293,8 +312,10 @@ func _think() -> void:
 		_think_t = randf_range(0.5, 0.9)
 		return
 	# 상대가 막고 서 있으면: 다가가서 잡는다 (잡기는 막기를 이긴다)
-	if target.blocking and _dist < 3.4 and randf() < grab_chance + mind.grab_urge() * 0.6:
-		if _dist < float(MoveSet.MOVES.grab.reach) + 0.2:
+	if _try_special():
+		return
+	if target.blocking and _dist < 3.4 and randf() < (grab_chance + mind.grab_urge() * 0.6) * minf(_style("grab"), 1.6):
+		if _dist < float(_mv("grab").reach) + 0.2:
 			_start_attack("grab")
 		else:
 			_grab_wait = 0.7
@@ -311,16 +332,22 @@ func _think() -> void:
 	if _dist > 2.6 and _dist < 4.6 and randf() < charge_chance * (1.0 if r < aggression else 0.3):
 		_start_attack("charge")
 		return
-	if _dist > 3.2:
+	if _dist > 3.2 * _style("range"):
 		sm.go("approach")
 		return
 	if r < aggression:
-		if randf() < 0.15:
+		if randf() < 0.15 * _style("heavy"):
 			_start_attack("heavy")
 			_combo_left = 0
 		else:
 			# 방향은 상대가 덜 막는 쪽, 지금 막고 있는 쪽은 피해서
 			var dir := mind.choose_dir(target.guard_dir if target.blocking else "")
+			# 무기 버릇: 창은 찌르기, 대검은 내려베기를 즐겨 쓴다 (막는 방향은 피해서)
+			var guard_now := target.guard_dir if target.blocking else ""
+			if guard_now != AttackDir.MID and randf() < (_style("thrust") - 1.0) * 0.3:
+				dir = AttackDir.MID
+			elif guard_now != AttackDir.HIGH and randf() < (_style("overhead") - 1.0) * 0.3:
+				dir = AttackDir.HIGH
 			_combo_left = 0
 			if dir == AttackDir.SIDE and randf() < combo_chance:
 				# 연속 베기: 몇 번 이어 갈지 미리 정한다 (0~2번 더)
@@ -360,7 +387,7 @@ func _set_guard(dir: String) -> void:
 func on_target_attack(kind: String) -> void:
 	if not active or dead:
 		return
-	var dir: String = MoveSet.MOVES[kind].get("dir", "") if MoveSet.MOVES.has(kind) else ""
+	var dir: String = Weapons.move(target.weapon, kind).get("dir", "") if (MoveSet.MOVES.has(kind) or kind == "special") else ""
 	if kind == "grab":
 		mind.saw_grab()
 	else:
@@ -397,7 +424,7 @@ func on_target_attack(kind: String) -> void:
 			_dash_dir(-1.0, 0.3)
 		return
 	guard_dir = _read_dir(dir)
-	var big := kind in ["heavy", "charge"]
+	var big := kind in ["heavy", "charge", "special"]
 	# 상대가 자주 속이면 서둘러 막지 않는다
 	var block := (block_chance + (0.25 if _alert > 0.0 else 0.0)) * (1.0 - mind.feint_rate * 0.6)
 	var dodge := dodge_chance
@@ -485,14 +512,14 @@ func _neutral_update(delta: float) -> void:
 		# 잡으려고 바짝 붙는다
 		_grab_wait -= delta
 		_move = _dir * _speed() * 1.2
-		if _dist < float(MoveSet.MOVES.grab.reach) and target.blocking:
+		if _dist < float(_mv("grab").reach) and target.blocking:
 			_grab_wait = 0.0
 			_start_attack("grab")
 		return
 	if state == "approach":
-		_move = _dir * _speed() if _dist > 2.0 else Vector3.ZERO
+		_move = _dir * _speed() if _dist > 2.0 * _style("range") else Vector3.ZERO
 	else:
-		var keep := (_dist - 2.6) * 1.5
+		var keep := (_dist - 2.6 * _style("range")) * 1.5
 		if stamina < 22.0:
 			keep = (_dist - 4.0) * 1.5   # 숨 고르는 중엔 멀찍이
 		_move = side * _strafe_dir * STRAFE_SPEED * build.speed_mult() + _dir * keep
@@ -500,7 +527,7 @@ func _neutral_update(delta: float) -> void:
 
 
 func _start_attack(kind: String) -> void:
-	if stamina < float(MoveSet.MOVES[kind].cost) * 0.5:
+	if stamina < float(_mv(kind).cost) * 0.5:
 		_back_to_neutral()
 		return
 	_attack = kind
@@ -526,7 +553,7 @@ func attack_dir() -> String:
 		return ""
 	if _attack == "grab":
 		return "grab"
-	return MoveSet.MOVES[_attack].get("dir", "")
+	return _mv(_attack).get("dir", "")
 
 
 ## 공격 준비가 얼마나 됐나 (0~1, 휘두르는 중이면 1)
@@ -545,7 +572,9 @@ func attack_threat() -> bool:
 
 func _windup_enter(_d: Dictionary) -> void:
 	_hit_done = false
-	var data: Dictionary = MoveSet.MOVES[_attack]
+	var data: Dictionary = _mv(_attack)
+	if _attack == "special" and data.effect == "quake" and is_on_floor():
+		velocity.y = 5.0   # 뛰어올랐다 내리찍는다
 	spend_stamina(float(data.cost))
 	# 자꾸 피하면 일부러 한 박자 늦게 휘두르기도 한다
 	_windup_len = data.ai_windup * _atk_mult() + randf() * 0.12 * mini(_dodged_by_target, 3)
@@ -553,6 +582,9 @@ func _windup_enter(_d: Dictionary) -> void:
 	var col := Color(1.0, 0.55, 0.1)
 	if data.warn == "heavy":
 		col = Color(1.0, 0.15, 0.1)
+	if _attack == "special":
+		col = Color(1.0, 0.8, 0.15)   # 금빛 = 필살기: 막기보다 피하라
+		combat_event.emit("상대 필살기: %s!" % data.name, Color(1.0, 0.8, 0.3))
 	if _attack == "counter":
 		col = Color(0.4, 0.8, 1.0)
 	if _attack == "grab":
@@ -563,7 +595,7 @@ func _windup_enter(_d: Dictionary) -> void:
 
 
 func _windup_update(_delta: float) -> void:
-	var data: Dictionary = MoveSet.MOVES[_attack]
+	var data: Dictionary = _mv(_attack)
 	_turn_speed = WINDUP_TURN_SPEED
 	var k := clampf(_state_t / (data.ai_windup * _atk_mult()), 0.0, 1.0)
 	rig.glow(rig.blade_mat.emission, k * k * 3.5)
@@ -585,7 +617,7 @@ func _windup_update(_delta: float) -> void:
 ## 상대가 내 공격 방향에 맞춰 막고 있으면: 방향을 바꾸거나, 잡기로 바꾸거나, 멈춘다.
 ## 잘 막는 상대일수록 자주 쓴다. 바꾼 뒤에도 보고 막을 시간은 남겨 둔다.
 func _try_feint() -> bool:
-	if _attack in ["counter", "grab"]:
+	if _attack in ["counter", "grab", "special"]:
 		return false
 	var chance := feint_chance * (0.4 + mind.feint_urge())
 	var reading := target.blocking and AttackDir.blocks(target.guard_dir, attack_dir())
@@ -595,7 +627,7 @@ func _try_feint() -> bool:
 		return false
 	stats["feint"] = stats.get("feint", 0) + 1
 	var r := randf()
-	if target.blocking and _dist < float(MoveSet.MOVES.grab.reach) + 0.6 and r < 0.5:
+	if target.blocking and _dist < float(_mv("grab").reach) + 0.6 and r < 0.5:
 		# 휘두르는 척하다 잡기
 		stats["feint_grab"] = stats.get("feint_grab", 0) + 1
 		_start_attack("grab")
@@ -615,7 +647,7 @@ func _try_feint() -> bool:
 		_combo_left = 0
 		_attack = _move_for_dir(dir)
 		_feint_checked = true
-		var data: Dictionary = MoveSet.MOVES[_attack]
+		var data: Dictionary = _mv(_attack)
 		_windup_len = maxf(data.ai_windup * _atk_mult() * 0.75, 0.32)
 		sm.time = 0.0
 		rig.set_pose(data.body.windup, 3.0 / _windup_len)
@@ -633,16 +665,21 @@ func _try_feint() -> bool:
 
 
 func _strike_enter(_d: Dictionary) -> void:
-	var data: Dictionary = MoveSet.MOVES[_attack]
+	var data: Dictionary = _mv(_attack)
+	if _attack == "special":
+		_special_strike(data)
 	rig.set_pose(data.body.strike, 30.0)
 	rig.tremble = 0.0
 	_play("swing", -2.0)
 
 
 func _strike_update(_delta: float) -> void:
-	var data: Dictionary = MoveSet.MOVES[_attack]
+	var data: Dictionary = _mv(_attack)
 	_turn_speed = 0.5
 	_move = -global_transform.basis.z * float(data.lunge) if _dist > 1.3 else Vector3.ZERO
+	if _attack == "special" and data.effect == "rush" and not _hit_done:
+		_move = -global_transform.basis.z * float(data.rush_speed)
+		_turn_speed = 1.5
 	if not _hit_done:
 		if _attack == "grab":
 			_try_grab(data)
@@ -661,7 +698,7 @@ func _recover_enter(_d: Dictionary) -> void:
 
 
 func _recover_update(delta: float) -> void:
-	var data: Dictionary = MoveSet.MOVES[_attack]
+	var data: Dictionary = _mv(_attack)
 	_turn_speed = 3.0
 	rig.glow(rig.blade_mat.emission, move_toward(rig.glow_energy(), 0.0, delta * 10.0))
 	var nxt: String = data.next
@@ -872,16 +909,20 @@ func _try_hit(data: Dictionary) -> void:
 		return
 	var facing := -global_transform.basis.z
 	facing.y = 0
-	if facing.normalized().dot(_dir) < HIT_ANGLE:
+	if facing.normalized().dot(_dir) < (HIT_ANGLE if data.get("effect", "") != "whirl" else -1.0):
 		return
 	_hit_done = true
 	var info := {
-		"move": _attack, "damage": int(round(float(data.damage) * build.damage_mult() * vkit.damage_mult())) + randi_range(-2, 2),
+		"move": _attack, "damage": int(round(float(data.damage) * float(data.get("hits", 1)) * build.damage_mult() * vkit.damage_mult())) + randi_range(-2, 2),
 		"power": vkit.powered(),
-		"react": data.react, "guard": data.get("ai_guard", data.guard), "pressure": build.guard_pressure(),
+		"react": data.react, "guard": data.get("ai_guard", data.guard),
+		"pressure": build.guard_pressure() * Weapons.stat(weapon, "pressure"),
+		"push_add": data.get("push_add", 0.0), "push": data.get("push", 0.0), "lift": data.get("lift", 2.0),
 		"dir": data.get("dir", ""),
 	}
 	var result := target.receive_attack(info, self)
+	if result in ["hit", "guard_broken", "wrong_guard"] and _attack != "special":
+		add_gauge(info.damage * Weapons.GAUGE.dealt)
 	mind.my_attack_result(info.dir, result)
 	stats["res_" + result] = stats.get("res_" + result, 0) + 1
 	match result:
@@ -1054,13 +1095,14 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 			_stagger(MoveSet.REACTIONS.stagger.time if big else MoveSet.REACTIONS.flinch.time, big)
 		return "hit"
 	if state == "block" and facing_attacker and info.guard != "unblockable":
-		var parry := parry_chance * (1.0 + 0.12 * (float(build.stats.tec) - 5.0))
+		var parry := parry_chance * (1.0 + 0.12 * (float(build.stats.tec) - 5.0)) * Weapons.stat(weapon, "parry")
 		if _state_t < 0.3 and randf() < parry:
 			_play("parry")
 			# 튕겨낸 뒤 바로 반격
 			_combo_left = 0
 			_start_attack("slash1")
-			sm.time = MoveSet.MOVES.slash1.ai_windup * 0.45
+			sm.time = _mv("slash1").ai_windup * 0.45
+			add_gauge(Weapons.GAUGE.parry)
 			return "parried"
 		if info.guard == "break":
 			# 막기를 깨는 공격
@@ -1072,7 +1114,8 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 			return "hit"
 		_play("clang", -2.0)
 		_push = dir * (4.0 if big else 2.0)
-		spend_stamina(float(BLOCK_COST.get(info.react, 12.0)) * float(info.get("pressure", 1.0)))
+		spend_stamina(float(BLOCK_COST.get(info.react, 12.0)) * float(info.get("pressure", 1.0)) * Weapons.stat(weapon, "block_cost"))
+		add_gauge(Weapons.GAUGE.block)
 		if stamina <= 0.0:
 			# 기력이 바닥나 막기가 깨졌다
 			combat_event.emit("가드 깨기!", Color(1.0, 0.75, 0.3))
@@ -1084,11 +1127,15 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 			# 막아낸 뒤 상대가 튕겨난 틈에 바로 반격
 			_combo_left = 0
 			_start_attack("slash1")
-			sm.time = MoveSet.MOVES.slash1.ai_windup * 0.35
+			sm.time = _mv("slash1").ai_windup * 0.35
 		else:
 			sm.time = 0.0   # 계속 막고 있는다
 		return "blocked"
 
+	if _attack == "special" and state in ["windup", "strike"]:
+		# 필살기를 쓰는 동안은 맞아도 멈추지 않는다 (피해는 받는다)
+		_apply_damage(damage, dir, false)
+		return "hit"
 	_apply_damage(damage, dir, big)
 	_hits_in_row += 1
 	_hits_reset = 1.2
@@ -1099,6 +1146,8 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 			_dash_dir(-1.0, 0.5)
 		elif big:
 			_stagger(MoveSet.REACTIONS.stagger.time)
+		elif state in ["windup", "strike"] and Weapons.has_armor(weapon) and _attack != "grab":
+			pass   # 대검: 휘두르는 중엔 잔매에 끊기지 않는다
 		elif state == "windup" and _attack in ["heavy", "charge", "slash3"]:
 			pass   # 큰 공격을 준비 중이면 가벼운 공격엔 버티고 그대로 휘두른다 (맞교환)
 		elif state == "windup" and randf() < 0.5:
@@ -1110,6 +1159,7 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 
 func _apply_damage(damage: int, dir: Vector3, big: bool) -> void:
 	hp = max(hp - damage, 0)
+	add_gauge(damage * Weapons.GAUGE.taken)
 	hp_changed.emit(hp, max_hp)
 	_alert = 2.0
 	var r: Dictionary = MoveSet.REACTIONS["stagger" if big else "flinch"]
@@ -1388,7 +1438,7 @@ func _think_vertical() -> bool:
 		stats["stomp"] = stats.get("stomp", 0) + 1
 		return true
 	# 높은 곳에서 아래 상대에게 낙하 찍기
-	var plunge_cost: float = MoveSet.MOVES.plunge.cost
+	var plunge_cost: float = _mv("plunge").cost
 	if _dy < -1.8 and _dy > -9.0 and _dist < 6.5 and is_on_floor() and stamina > plunge_cost \
 			and randf() < 0.6 and _clear_line_to_target():
 		_leap_plunge()
@@ -1497,7 +1547,7 @@ func _leap_plunge() -> void:
 	velocity = _leap_v + Vector3.UP * 3.5
 	_attack = "plunge"
 	stats["move_plunge"] = stats.get("move_plunge", 0) + 1
-	spend_stamina(float(MoveSet.MOVES.plunge.cost))
+	spend_stamina(float(_mv("plunge").cost))
 	sm.go("plunge")
 
 
@@ -1505,14 +1555,14 @@ func _plunge_enter(_d: Dictionary) -> void:
 	_plunge_landed = false
 	_plunge_from = global_position.y
 	_combo_left = 0
-	rig.set_pose(MoveSet.MOVES.plunge.body.windup, 10.0)
+	rig.set_pose(_mv("plunge").body.windup, 10.0)
 	rig.glow(Color(1.0, 0.15, 0.1), 3.0)
 	_play("warn_heavy", -2.0)
 	combat_event.emit("위에서 내려온다!", Color(1.0, 0.45, 0.3))
 
 
 func _plunge_update(_delta: float) -> void:
-	var data: Dictionary = MoveSet.MOVES.plunge
+	var data: Dictionary = _mv("plunge")
 	if _plunge_landed:
 		_turn_speed = 2.0
 		if _state_t >= float(data.ai_recover) * _atk_mult():
@@ -1531,7 +1581,7 @@ func _plunge_update(_delta: float) -> void:
 
 
 func _plunge_impact() -> void:
-	var data: Dictionary = MoveSet.MOVES.plunge
+	var data: Dictionary = _mv("plunge")
 	_plunge_landed = true
 	sm.time = 0.0
 	velocity = Vector3.ZERO
@@ -1643,12 +1693,12 @@ func _zip_update(delta: float) -> void:
 	_turn_speed = 12.0
 	# 지나가는 길 아래에 상대가 있으면 손을 놓고 내리꽂는다
 	var below := global_position.y - target.global_position.y
-	if below > 2.0 and _dist < 3.0 and stamina > float(MoveSet.MOVES.plunge.cost) * 0.5:
+	if below > 2.0 and _dist < 3.0 and stamina > float(_mv("plunge").cost) * 0.5:
 		_zip_leave(Vector3.ZERO)
 		_leap_v = _dir * 2.0
 		_attack = "plunge"
 		stats["move_plunge"] = stats.get("move_plunge", 0) + 1
-		spend_stamina(float(MoveSet.MOVES.plunge.cost))
+		spend_stamina(float(_mv("plunge").cost))
 		sm.go("plunge")
 		return
 	if _zip_t >= 1.0:
@@ -1828,3 +1878,72 @@ func _riding_lift() -> bool:
 				and absf(global_position.y - l.surface_y()) < 0.4:
 			return true
 	return false
+
+
+# ---------------- 필살기 ----------------
+# 게이지가 다 차면, 그 무기 필살기가 잘 맞을 거리에서 쓴다. 수치는 Weapons.WEAPONS[무기].special.
+# 준비 동작은 금빛으로 빛난다 → 플레이어는 막지 말고 대시로 피해야 한다.
+
+func add_gauge(amount: float) -> void:
+	if amount <= 0.0 or dead or (_attack == "special" and state in ["windup", "strike"]):
+		return
+	var before := gauge
+	gauge = minf(gauge + amount, Weapons.GAUGE_MAX)
+	if gauge != before:
+		gauge_changed.emit(gauge, Weapons.GAUGE_MAX)
+
+
+func _try_special() -> bool:
+	if gauge < Weapons.GAUGE_MAX or target.sm.state == "iron" or randf() > 0.55:
+		return false
+	var sp := _mv("special")
+	var ok := false
+	match str(sp.effect):
+		"whirl":
+			ok = _dist < float(sp.reach) - 0.4
+		"quake":
+			ok = _dist < float(sp.reach) - 0.8
+		"shadow":
+			ok = _dist > 1.8 and _dist < float(sp.jump)
+		"rush":
+			ok = _dist > 2.5 and _dist < float(sp.rush_speed) * float(sp.active) + 1.5
+	if not ok or absf(_dy) > 1.2:
+		return false
+	gauge = 0.0
+	gauge_changed.emit(gauge, Weapons.GAUGE_MAX)
+	stats["special"] = stats.get("special", 0) + 1
+	_combo_left = 0
+	_start_attack("special")
+	return true
+
+
+func _special_strike(data: Dictionary) -> void:
+	match str(data.effect):
+		"shadow":
+			# 상대 등 뒤로 순간이동
+			Fx.sparks(get_parent(), global_position + Vector3.UP, Vector3.UP, 18, Color(0.5, 0.35, 0.9))
+			var back := target.global_transform.basis.z
+			back.y = 0
+			back = back.normalized()
+			var spot := target.global_position + back * 1.3
+			for side in [back, back.rotated(Vector3.UP, 1.2), back.rotated(Vector3.UP, -1.2)]:
+				_ray.from = target.global_position + Vector3.UP
+				_ray.to = _ray.from + side * 1.6
+				_ray.exclude = [get_rid(), target.get_rid()]
+				if get_world_3d().direct_space_state.intersect_ray(_ray).is_empty():
+					spot = target.global_position + side * 1.3
+					break
+			global_position = Vector3(spot.x, target.global_position.y + 0.05, spot.z)
+			var look := target.global_position - global_position
+			look.y = 0
+			rotation.y = atan2(-look.x, -look.z)
+			_dir = look.normalized()
+			_dist = look.length()
+			_iframes = 0.2
+			Fx.sparks(get_parent(), global_position + Vector3.UP, Vector3.UP, 18, Color(0.5, 0.35, 0.9))
+		"quake":
+			velocity.y = minf(velocity.y, -10.0)
+			for i in 10:
+				var a := TAU * float(i) / 10.0
+				Fx.sparks(get_parent(), global_position - global_transform.basis.z * 1.6 + Vector3(cos(a), 0.1, sin(a)) * 1.4,
+						Vector3(cos(a), 0.6, sin(a)), 8, Color(1.0, 0.75, 0.35))

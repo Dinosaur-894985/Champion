@@ -28,6 +28,8 @@ var _counters := 0
 var _dodge_side := 1.0
 var _ai_preset := "검객"
 var _my_preset := ""
+var _my_weapon := ""   # weapon=창 처럼 내 무기 (sword/greatsword/daggers/spear)
+var _ai_weapon := ""   # aiweapon=... AI 무기
 var _trace := false   # trace=1: 대결 중 AI 상태 변화와 결과를 한 줄씩 출력
 
 
@@ -46,6 +48,10 @@ func _initialize() -> void:
 			_ai_preset = a.substr(7)
 		elif a.begins_with("me="):
 			_my_preset = a.substr(3)
+		elif a.begins_with("weapon="):
+			_my_weapon = a.substr(7)
+		elif a.begins_with("aiweapon="):
+			_ai_weapon = a.substr(9)
 		elif a == "trace=1":
 			_trace = true
 	seed(seed_value)
@@ -54,7 +60,13 @@ func _initialize() -> void:
 	Game.opponent_preset = _ai_preset
 	Game.current_opponent = null
 	Game.test_player_build = CharacterBuild.new() if _my_preset == "" else CharacterBuild.preset(_my_preset)
+	if _my_weapon != "":
+		Game.test_player_build.weapon = _my_weapon
+	if _ai_weapon != "":
+		Game.current_opponent = CharacterBuild.preset(_ai_preset)
+		Game.current_opponent.weapon = _ai_weapon
 	_check_build_rules()
+	_check_weapon_table()
 	if _only == "duel":
 		_start_duel()
 	elif _only == "parkour":
@@ -65,6 +77,8 @@ func _initialize() -> void:
 		_start_skills()
 	elif _only == "rps":
 		_start_rps()
+	elif _only == "weapons":
+		_start_weapons()
 	else:
 		Game.next_mode = "practice"
 		_game = GAME.instantiate()
@@ -100,6 +114,8 @@ func _process(_delta: float) -> bool:
 		_skills_step()
 	elif _phase == "rps":
 		_rps_step()
+	elif _phase == "weapons":
+		_weapons_step()
 	elif _phase == "duel":
 		_duel_step()
 	return false
@@ -436,7 +452,7 @@ func _dodger(player: Player, ai: Duelist, dist: float) -> void:
 		player.attack_released()
 		return
 	if ai.state == "windup":
-		var left: float = MoveSet.MOVES[ai._attack].ai_windup - ai._state_t
+		var left: float = Weapons.move(ai.weapon, ai._attack).ai_windup - ai._state_t
 		if left < 0.08 and dist < 3.4 and player.sm.state == "free":
 			_dodge_side = -_dodge_side
 			Input.action_press("move_right" if _dodge_side > 0 else "move_left")
@@ -816,7 +832,7 @@ func _rps_step() -> void:
 		if _only == "rps":
 			_report_and_quit()
 		else:
-			_start_duel()
+			_start_weapons()
 
 
 func _with(info: Dictionary, dir: String) -> Dictionary:
@@ -832,3 +848,126 @@ func _rps_place(player: Player, ai: Duelist, at: Vector3, gap: float) -> void:
 	ai.rotation.y = PI
 	player.velocity = Vector3.ZERO
 	ai.velocity = Vector3.ZERO
+
+
+# ---------------- 무기와 필살기 ----------------
+
+func _check_weapon_table() -> void:
+	var bad := []
+	var sw := Weapons.move("sword", "slash1")
+	if not (Weapons.move("daggers", "slash1").windup < sw.windup and sw.windup < Weapons.move("greatsword", "slash1").windup):
+		bad.append("speed order")
+	if not (Weapons.move("greatsword", "heavy").damage > Weapons.move("sword", "heavy").damage):
+		bad.append("greatsword damage")
+	if not (Weapons.move("spear", "thrust").reach > Weapons.move("sword", "thrust").reach + 1.0):
+		bad.append("spear reach")
+	if not (Weapons.move("daggers", "grab").reach >= Weapons.move("sword", "grab").reach):
+		bad.append("dagger grab")
+	if Weapons.move("daggers", "slash3").next != "slash1":
+		bad.append("dagger loop")
+	for w in Weapons.ORDER:
+		for m in MoveSet.MOVES:
+			var d := Weapons.move(w, m)
+			if float(d.windup) <= 0.0 and m != "plunge":
+				bad.append("%s %s windup" % [w, m])
+		if not Weapons.WEAPONS[w].has("special"):
+			bad.append(w + " special")
+	var rb := CharacterBuild.random_build()
+	if not Weapons.WEAPONS.has(rb.weapon):
+		bad.append("random weapon")
+	print("WEAPON table weapons=%d  => %s %s" % [Weapons.ORDER.size(), "OK" if bad.is_empty() else "FAIL", bad])
+	if not bad.is_empty():
+		_fail.append("weapon table")
+
+
+## 무기마다: 내 필살기가 AI 에게 맞는지, AI 필살기가 (막고 있는) 나에게 맞는지
+var _wi := 0
+var _wres := {}
+
+
+func _start_weapons() -> void:
+	_phase = "weapons"
+	_frame = 0
+	var w: String = Weapons.ORDER[_wi]
+	Game.next_mode = "duel"
+	Game.test_player_build = CharacterBuild.new()
+	Game.test_player_build.weapon = w
+	Game.current_opponent = CharacterBuild.preset("검객")
+	Game.current_opponent.weapon = w
+	_wres = {}
+	_game = GAME.instantiate()
+	root.add_child(_game)
+
+
+func _weapons_step() -> void:
+	if _frame > 170:
+		if _frame == 172:
+			_wi += 1
+			if _wi < Weapons.ORDER.size():
+				_start_weapons()
+			elif _only == "weapons":
+				_report_and_quit()
+			else:
+				Game.test_player_build = CharacterBuild.new() if _my_preset == "" else CharacterBuild.preset(_my_preset)
+				_start_duel()
+		return
+	var player: Player = _game.player
+	var ai: Duelist = _game.duelist
+	var w: String = Weapons.ORDER[_wi]
+	var sp := Weapons.move(w, "special")
+	var gap := 2.0
+	match str(sp.effect):
+		"rush":
+			gap = 5.0
+		"shadow":
+			gap = 4.5
+	if _frame == 3:
+		_game.hud.hide_menu()
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		player.controls_enabled = true
+		player.hp = 100000
+		player.max_hp = 100000
+		ai.hp = 100000
+		ai.max_hp = 100000
+		player.attack_received.connect(func(r): _wres["me_" + r] = _wres.get("me_" + r, 0) + 1)
+	if _frame == 5:
+		ai.active = false
+		ai.sm.go("idle")
+		_rps_place(player, ai, Vector3(0, 0.1, 0), gap)
+		player.head.rotation.x = 0.0
+		player.gauge = Weapons.GAUGE_MAX
+		player.try_special()
+		_wres["me_state"] = player.sm.state
+	if _frame == 5 + 8:
+		_shot("w_%s_me_special" % w)
+	if _frame == 75:
+		_wres["ai_got_hit"] = ai.stats.get("got_hit", 0)
+		_wres["me_gauge_reset"] = player.gauge < 10.0
+		# 이번엔 AI 차례: 막고 서 있는 나에게 필살기
+		player.sm.go("free")
+		_rps_place(player, ai, Vector3(0, 0.1, 0), gap)
+		ai.active = true
+		ai.gauge = Weapons.GAUGE_MAX
+		ai._dist = gap
+		ai._dir = Vector3(0, 0, 1)
+		ai.sm.go("idle")
+		ai._start_attack("special")
+		player.guard_dir = "side"
+		player.sm.go("block")
+	if _frame > 75 and _frame < 170:
+		player.rotation.y = 0.0
+		if player.sm.state == "free":
+			player.sm.go("block")
+		if ai.state == "windup" and ai._state_t > 0.3:
+			_shot_once("w_%s_ai_windup" % w)
+		if ai.state == "strike":
+			_shot_once("w_%s_ai_strike" % w)
+	if _frame == 170:
+		var got_me := int(_wres.get("me_hit", 0)) + int(_wres.get("me_guard_broken", 0)) + int(_wres.get("me_wrong_guard", 0))
+		var ok: bool = _wres.me_state == "special" and int(_wres.ai_got_hit) >= 1 and got_me >= 1 and _wres.me_gauge_reset
+		print("WEAPON %-10s special=%-6s me->ai hits=%d  ai->me(blocking)=%s  => %s" % [w, sp.effect, _wres.ai_got_hit,
+				_wres, "OK" if ok else "FAIL"])
+		if not ok:
+			_fail.append("weapon special " + w)
+		_game.queue_free()
+		Game.current_opponent = null
