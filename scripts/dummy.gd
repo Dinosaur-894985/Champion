@@ -25,6 +25,7 @@ var _thud_heavy: AudioStreamWAV
 
 
 func _ready() -> void:
+	add_to_group("grabbable")
 	collision_layer = 2
 	collision_mask = 0
 	_build()
@@ -130,6 +131,14 @@ func take_hit(info: Dictionary, dir: Vector3, _attacker: Node3D = null) -> Strin
 	if hp <= 0:
 		_fall(local_dir)
 	return "hit"
+
+
+## 잡혔을 때: 허수아비는 던져지지 않고 크게 흔들린다
+func take_grab(info: Dictionary, attacker: Node3D) -> String:
+	var dir := global_position - attacker.global_position
+	dir.y = 0
+	take_hit({"damage": info.damage, "react": "stagger"}, dir.normalized() if dir.length() > 0.01 else Vector3.FORWARD)
+	return "thrown"
 
 
 func _fall(local_dir: Vector3) -> void:

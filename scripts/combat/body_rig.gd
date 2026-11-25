@@ -34,11 +34,14 @@ var _pose_speed := 12.0
 var _kick := Vector3.ZERO        # 맞아서 젖혀진 각도 (라디안)
 var _kick_vel := Vector3.ZERO
 var tremble := 0.0               # 0~1, 힘 모을 때 떨림
+var reach := 0.0                 # 0~1, 잡으려고 왼손을 앞으로 뻗기
 var _flash := 0.0
 
 var _walk_phase := 0.0
 var _dash_amt := 0.0
 var _dash_local := Vector3.ZERO
+var _reach_amt := 0.0
+const REACH_ANGLE := -1.45
 var frozen := false              # 쓰러진 뒤에는 움직임을 멈춘다
 
 
@@ -107,7 +110,8 @@ func animate(delta: float, local_vel: Vector3) -> void:
 	var step := sin(_walk_phase) * amt * side_part * 0.3
 	_leg_l.rotation.z = -step - d * 0.35
 	_leg_r.rotation.z = step + d * 0.35
-	_arm_l.rotation.x = deg_to_rad(20) - swing * 0.6 * absf(fwd_part)
+	_reach_amt = lerpf(_reach_amt, reach, clampf(delta * 14.0, 0, 1))
+	_arm_l.rotation.x = lerpf(deg_to_rad(20) - swing * 0.6 * absf(fwd_part), REACH_ANGLE, _reach_amt)
 
 	# 2) 위 몸: 팔과 허리를 목표 자세로
 	_arm_r.rotation_degrees = _arm_r.rotation_degrees.lerp(_shoulder_target, k)
