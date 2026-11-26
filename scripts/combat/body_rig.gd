@@ -321,13 +321,47 @@ func fall(local_dir: Vector3) -> void:
 
 # ---------------- 몸 만들기 ----------------
 
-## 무기 → 옷차림
-const OUTFIT := {
-	"sword": "knight", "greatsword": "heavy", "daggers": "rogue", "spear": "lancer",
-	"staff": "monk", "shuriken": "shadow", "fists": "brawler",
+## 부위 모양마다 재질 (BodyRig.make_mats 의 이름): 허벅지, 정강이 / 신발 / 위팔, 아래팔, 손
+## 다리는 legs, 신발은 feet, 팔은 arms 부위가 고른 모양을 따른다 (CharacterBuild.parts)
+const LEG_LOOK := {
+	"knight": ["cloth_dark", "armor"], "heavy": ["armor", "armor_light"], "rogue": ["suit", "leather"],
+	"lancer": ["cloth_dark", "armor_light"], "monk": ["cream", "cream"], "shadow": ["suit", "cloth_dark"],
+	"brawler": ["cloth_dark", "cloth_dark"],
+}
+const FEET_LOOK := {
+	"knight": "leather", "heavy": "armor", "rogue": "leather_dark", "lancer": "leather",
+	"monk": "straw", "shadow": "suit", "brawler": "skin",
+}
+const ARM_LOOK := {
+	"knight": ["armor", "armor_light", "leather"], "heavy": ["armor_light", "armor_light", "armor"],
+	"rogue": ["cloth_dark", "leather", "leather_dark"], "lancer": ["cloth", "armor_light", "leather"],
+	"monk": ["cloth", "skin", "cream"], "shadow": ["suit", "cloth_dark", "suit"],
+	"brawler": ["skin", "skin", "cream"],
 }
 
 var _m := {}   # 재질 모음
+
+
+## 몸에 쓰는 재질 모음 (1인칭 손/다리도 같은 것을 쓴다)
+static func make_mats(b: CharacterBuild) -> Dictionary:
+	var acc := b.accent()
+	return {
+		"skin": LowPoly.mat(b.skin_color(), 0.75),
+		"hair": LowPoly.mat(b.hair_color(), 0.8),
+		"cloth": LowPoly.mat(acc, 0.85),
+		"cloth_dark": LowPoly.mat(acc.darkened(0.38), 0.9),
+		"trim": LowPoly.mat(acc.lightened(0.35), 0.8),
+		"armor": LowPoly.mat(Color(0.33, 0.35, 0.4), 0.45, 0.55),
+		"armor_light": LowPoly.mat(Color(0.62, 0.65, 0.7), 0.35, 0.7),
+		"leather": LowPoly.mat(Color(0.3, 0.19, 0.11), 0.9),
+		"leather_dark": LowPoly.mat(Color(0.17, 0.11, 0.07), 0.9),
+		"suit": LowPoly.mat(Color(0.13, 0.14, 0.17), 0.85),
+		"cream": LowPoly.mat(Color(0.88, 0.84, 0.74), 0.9),
+		"straw": LowPoly.mat(Color(0.72, 0.6, 0.36), 0.95),
+		"brass": LowPoly.mat(Color(0.78, 0.6, 0.28), 0.4, 0.75),
+		"eye": LowPoly.mat(Color(0.06, 0.05, 0.05), 0.4),
+		"visor": LowPoly.mat(Color(0.04, 0.04, 0.05), 0.3),
+	}
 
 
 func _mat(key: String, c: Color, rough := 0.85, metal := 0.0) -> StandardMaterial3D:
@@ -358,7 +392,11 @@ func _flap(parent: Node3D, pos: Vector3, size: Vector3, mat: Material, dir: floa
 
 func _build() -> void:
 	weapon = Weapons.valid(weapon)
-	var style: String = OUTFIT.get(weapon, "knight")
+	var s_head := build.part("head")
+	var s_torso := build.part("torso")
+	var s_arms := build.part("arms")
+	var s_legs := build.part("legs")
+	var s_feet := build.part("feet")
 	var st: Dictionary = build.stats
 	var bulk := clampf((float(st.get("str", 5)) + float(st.get("vit", 5)) - 2.0) / 18.0, 0.0, 1.0)
 	var agi := clampf(float(st.get("agi", 5)) / 10.0, 0.0, 1.0)
@@ -368,39 +406,34 @@ func _build() -> void:
 	scale = Vector3.ONE * (0.97 + bulk * 0.06)
 
 	var acc := build.accent()
-	var skin := _mat("skin", build.skin_color(), 0.75)
-	var hair := _mat("hair", build.hair_color(), 0.8)
-	var cloth := _mat("cloth", acc, 0.85)
-	var cloth_dark := _mat("cloth_dark", acc.darkened(0.38), 0.9)
-	var trim := _mat("trim", acc.lightened(0.35), 0.8)
-	var armor := _mat("armor", Color(0.33, 0.35, 0.4), 0.45, 0.55)
-	var armor_light := _mat("armor_light", Color(0.62, 0.65, 0.7), 0.35, 0.7)
-	var leather := _mat("leather", Color(0.3, 0.19, 0.11), 0.9)
-	var leather_dark := _mat("leather_dark", Color(0.17, 0.11, 0.07), 0.9)
-	var suit := _mat("suit", Color(0.13, 0.14, 0.17), 0.85)
-	var cream := _mat("cream", Color(0.88, 0.84, 0.74), 0.9)
-	var brass := _mat("brass", Color(0.78, 0.6, 0.28), 0.4, 0.75)
-	var eye := _mat("eye", Color(0.06, 0.05, 0.05), 0.4)
-	var visor := _mat("visor", Color(0.04, 0.04, 0.05), 0.3)
+	_m = make_mats(build)
+	var skin: Material = _m.skin
+	var hair: Material = _m.hair
+	var cloth: Material = _m.cloth
+	var cloth_dark: Material = _m.cloth_dark
+	var armor: Material = _m.armor
+	var armor_light: Material = _m.armor_light
+	var leather: Material = _m.leather
+	var leather_dark: Material = _m.leather_dark
+	var suit: Material = _m.suit
+	var cream: Material = _m.cream
+	var eye: Material = _m.eye
 	_flash_mat = LowPoly.mat(Color(1, 0.95, 0.9, 0.0))
 	_flash_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_flash_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 
-	# 옷차림마다 부위 재질: 허벅지, 정강이, 신발, 위팔, 아래팔, 손
-	var look: Array = {
-		"knight": [cloth_dark, armor, leather, armor, armor_light, leather],
-		"heavy": [armor, armor_light, armor, armor_light, armor_light, armor],
-		"rogue": [suit, leather, leather_dark, cloth_dark, leather, leather_dark],
-		"lancer": [cloth_dark, armor_light, leather, cloth, armor_light, leather],
-		"monk": [cream, cream, leather, cloth, skin, cream],
-		"shadow": [suit, cloth_dark, suit, suit, cloth_dark, suit],
-		"brawler": [cloth_dark, cloth_dark, leather_dark, skin, skin, cream],
-	}[style]
+	# 부위마다 고른 모양의 재질: 허벅지, 정강이, 신발, 위팔, 아래팔, 손
+	var look: Array = []
+	for k in LEG_LOOK.get(s_legs, LEG_LOOK.knight):
+		look.append(_m[k])
+	look.append(_m[FEET_LOOK.get(s_feet, "leather")])
+	for k in ARM_LOOK.get(s_arms, ARM_LOOK.knight):
+		look.append(_m[k])
 
 	# ---- 엉덩이와 다리 ----
 	_hips = Node3D.new()
 	add_child(_hips)
-	var thigh_r := 0.085 * _limb * (1.22 if style in ["monk", "brawler"] else 1.0)   # 도복/격투복은 바지가 넉넉하다
+	var thigh_r := 0.085 * _limb * (1.22 if s_legs in ["monk", "brawler"] else 1.0)   # 도복/격투복은 바지가 넉넉하다
 	for side in [-1.0, 1.0]:
 		var leg := Node3D.new()
 		leg.position = Vector3(0.11 * side * _w, 0.92, 0)
@@ -412,17 +445,18 @@ func _build() -> void:
 		_p(knee, LowPoly.cyl(0.066 * _limb, 0.08 * _limb, 0.4, 7), look[1], Vector3(0, -0.2, 0))
 		_p(knee, LowPoly.box(Vector3(0.12, 0.1, 0.24) * Vector3(_limb, 1, 1)), look[2], Vector3(0, -0.43, -0.04))
 		_p(knee, LowPoly.box(Vector3(0.1, 0.05, 0.08)), look[2], Vector3(0, -0.4, -0.15), Vector3(-20, 0, 0))
-		match style:
+		match s_legs:
 			"knight", "lancer", "heavy":
 				_p(knee, LowPoly.sphere(0.07 * _limb, 6, 4), armor_light, Vector3(0, 0.0, -0.04))   # 무릎 덮개
 				_p(knee, LowPoly.box(Vector3(0.12, 0.26, 0.04) * Vector3(_limb, 1, 1)), armor_light, Vector3(0, -0.2, -0.07))
 			"monk", "shadow":
 				for i in 3:
-					_p(knee, LowPoly.cyl(0.075 * _limb, 0.075 * _limb, 0.03, 7), cream if style == "monk" else cloth, Vector3(0, -0.12 - i * 0.08, 0))
+					_p(knee, LowPoly.cyl(0.075 * _limb, 0.075 * _limb, 0.03, 7), cream if s_legs == "monk" else cloth, Vector3(0, -0.12 - i * 0.08, 0))
 			"brawler":
 				_p(knee, LowPoly.cyl(0.08 * _limb, 0.08 * _limb, 0.05, 7), cloth, Vector3(0, -0.34, 0))
 			"rogue":
 				_p(knee, LowPoly.cyl(0.085 * _limb, 0.078 * _limb, 0.16, 7), leather_dark, Vector3(0, -0.3, 0))
+		_build_feet(knee, s_feet)
 		if side < 0:
 			_leg_l = leg
 			_knee_l = knee
@@ -435,27 +469,27 @@ func _build() -> void:
 	_torso.position = Vector3(0, 0.95, 0)
 	_hips.add_child(_torso)
 	var chest_mat: Material = {"knight": armor, "heavy": armor, "rogue": leather, "lancer": armor,
-			"monk": cloth, "shadow": suit, "brawler": cream}[style]
+			"monk": cloth, "shadow": suit, "brawler": cream}[s_torso]
 	var belly_mat: Material = {"knight": cloth_dark, "heavy": armor, "rogue": suit, "lancer": cloth_dark,
-			"monk": cloth, "shadow": suit, "brawler": cream}[style]
+			"monk": cloth, "shadow": suit, "brawler": cream}[s_torso]
 	_body_meshes.append(_p(_torso, LowPoly.cyl(0.17 * _w, 0.18 * _w, 0.2, 8), look[0], Vector3(0, -0.02, 0)))
 	_p(_torso, LowPoly.cyl(0.165 * _w, 0.17 * _w, 0.2, 8), belly_mat, Vector3(0, 0.16, 0))
 	_body_meshes.append(_p(_torso, LowPoly.cyl(0.24 * _sw, 0.17 * _w, 0.36, 8), chest_mat, Vector3(0, 0.43, 0), Vector3.ZERO, Vector3(1, 1, 0.82)))
 	_p(_torso, LowPoly.cyl(0.2 * _sw, 0.24 * _sw, 0.07, 8), chest_mat, Vector3(0, 0.64, 0), Vector3.ZERO, Vector3(1, 1, 0.8))
 	_p(_torso, LowPoly.cyl(0.055, 0.065, 0.1, 7), skin, Vector3(0, 0.71, 0))
 	# 허리띠
-	var belt_mat: Material = cloth if style in ["monk", "brawler", "rogue", "shadow"] else leather
-	_p(_torso, LowPoly.cyl(0.185 * _w, 0.185 * _w, 0.07 if style != "monk" else 0.11, 8), belt_mat, Vector3(0, 0.07, 0))
-	_build_outfit(style)
+	var belt_mat: Material = cloth if s_torso in ["monk", "brawler", "rogue", "shadow"] else leather
+	_p(_torso, LowPoly.cyl(0.185 * _w, 0.185 * _w, 0.07 if s_torso != "monk" else 0.11, 8), belt_mat, Vector3(0, 0.07, 0))
+	_build_outfit(s_torso)
 
 	# ---- 머리 ----
 	_head = Node3D.new()
 	_head.position = Vector3(0, 0.845, 0)
 	_torso.add_child(_head)
-	_build_head(style, skin, hair, eye)
+	_build_head(s_head, skin, hair, eye)
 
 	# ---- 팔 ----
-	var arm_t := _limb * (1.12 if style == "brawler" else 1.0)
+	var arm_t := _limb * (1.12 if s_arms == "brawler" else 1.0)
 	for side in [-1.0, 1.0]:
 		var sh := Node3D.new()
 		sh.position = Vector3(0.265 * side * _sw, 0.6, 0)
@@ -467,14 +501,14 @@ func _build() -> void:
 		sh.add_child(el)
 		_p(el, LowPoly.sphere(0.05 * arm_t, 6, 4), look[4], Vector3.ZERO)
 		_p(el, LowPoly.cyl(0.05 * arm_t, 0.056 * arm_t, FORE - 0.03, 7), look[4], Vector3(0, -FORE * 0.48, 0))
-		match style:
+		match s_arms:
 			"knight", "lancer", "heavy":
 				_p(el, LowPoly.cyl(0.066 * arm_t, 0.058 * arm_t, 0.13, 7), armor_light, Vector3(0, -FORE + 0.08, 0))   # 손목 보호대
 			"monk", "brawler":
 				for i in 3:
 					_p(el, LowPoly.cyl(0.054 * arm_t, 0.054 * arm_t, 0.025, 7), cream, Vector3(0, -FORE + 0.04 + i * 0.045, 0))
 			"rogue", "shadow":
-				_p(el, LowPoly.cyl(0.058 * arm_t, 0.054 * arm_t, 0.14, 7), cloth if style == "shadow" else leather_dark, Vector3(0, -FORE + 0.09, 0))
+				_p(el, LowPoly.cyl(0.058 * arm_t, 0.054 * arm_t, 0.14, 7), cloth if s_arms == "shadow" else leather_dark, Vector3(0, -FORE + 0.09, 0))
 		var wr := Node3D.new()
 		wr.position = Vector3(0, -FORE, 0)
 		el.add_child(wr)
@@ -489,7 +523,7 @@ func _build() -> void:
 			_elbow_r = el
 			_wrist = wr
 	_arm_r.rotation_degrees = _shoulder_target
-	_build_outfit_arms(style)
+	_build_outfit_arms(s_arms)
 
 	# ---- 무기 ----
 	# 무기는 손에서 앞(-Z)으로 뻗는다. 모양은 Weapons.build_model (+Y 로 뻗는 모양을 눕혀서 붙인다)
@@ -620,8 +654,6 @@ func _build_outfit(style: String) -> void:
 		"brawler":
 			# 민소매 웃옷, 매듭 띠, 넉넉한 바지 자락
 			_p(t, LowPoly.cyl(0.22 * _sw, 0.18 * _w, 0.06, 8), m.cloth, Vector3(0, 0.26, 0), Vector3.ZERO, Vector3(1, 1, 0.82))
-			for s in [-1.0, 1.0]:
-				_p(t, LowPoly.sphere(0.085 * _limb * 1.12, 7, 4), m.skin, Vector3(0.24 * s * _sw, 0.6, 0), Vector3.ZERO, Vector3(1.2, 1.0, 1.1))
 			_flap(t, Vector3(0.1, 0.06, -0.15), Vector3(0.05, 0.26, 0.02), m.cloth, 1.0, Vector3(0, 0, 10))
 			_flap(t, Vector3(0.14, 0.06, -0.13), Vector3(0.05, 0.2, 0.02), m.cloth, 1.0, Vector3(0, 0, -6))
 
@@ -637,6 +669,30 @@ func _build_outfit_arms(style: String) -> void:
 		"monk":
 			for a in [_arm_l, _arm_r]:
 				_p(a, LowPoly.cyl(0.075 * _limb, 0.09 * _limb, 0.18, 7), _m.cloth, Vector3(0, -0.14, 0))   # 넓은 소매
+		"brawler":
+			for s in [-1.0, 1.0]:
+				_p(_torso, LowPoly.sphere(0.085 * _limb * 1.12, 7, 4), _m.skin, Vector3(0.24 * s * _sw, 0.6, 0), Vector3.ZERO, Vector3(1.2, 1.0, 1.1))   # 드러난 어깨
+
+
+## 신발 모양마다 덧붙이는 것 (knee 노드 기준, 발은 -0.43 높이)
+func _build_feet(knee: Node3D, style: String) -> void:
+	match style:
+		"heavy":
+			_p(knee, LowPoly.box(Vector3(0.13 * _limb, 0.05, 0.12)), _m.armor_light, Vector3(0, -0.36, -0.08), Vector3(-15, 0, 0))   # 쇠 발등
+		"lancer":
+			_p(knee, LowPoly.box(Vector3(0.11, 0.04, 0.06)), _m.armor_light, Vector3(0, -0.45, -0.15))   # 쇠 코
+			_p(knee, LowPoly.cyl(0.075 * _limb, 0.075 * _limb, 0.03, 7), _m.brass, Vector3(0, -0.33, 0))
+		"knight", "rogue":
+			_p(knee, LowPoly.cyl(0.078 * _limb, 0.072 * _limb, 0.1, 7), _m[FEET_LOOK[style]], Vector3(0, -0.33, 0))   # 장화 목
+		"monk":
+			_p(knee, LowPoly.box(Vector3(0.125 * _limb, 0.02, 0.25)), _m.leather, Vector3(0, -0.475, -0.04))   # 짚신 바닥
+			for i in 2:
+				_p(knee, LowPoly.box(Vector3(0.13 * _limb, 0.015, 0.02)), _m.leather_dark, Vector3(0, -0.42, -0.1 + i * 0.08))
+		"shadow":
+			for i in 3:
+				_p(knee, LowPoly.cyl(0.07 * _limb, 0.07 * _limb, 0.02, 7), _m.cloth_dark, Vector3(0, -0.3 - i * 0.035, 0))   # 감은 끈
+		"brawler":
+			_p(knee, LowPoly.cyl(0.07 * _limb, 0.068 * _limb, 0.07, 7), _m.cream, Vector3(0, -0.36, 0))   # 발목 붕대
 
 
 ## 머리: 얼굴(눈, 눈썹, 코, 귀) + 머리 모양 + 옷차림에 따른 투구/두건/머리띠
@@ -685,7 +741,7 @@ func _build_head(style: String, skin: Material, hair: Material, eye: Material) -
 				_p(h, LowPoly.box(Vector3(0.02, 0.1, 0.1)), m.armor_light, Vector3(0.125 * s, -0.02, -0.02), Vector3(0, 0, 6 * s))
 			_p(h, LowPoly.box(Vector3(0.022, 0.09, 0.28)), m.cloth, Vector3(0, 0.19, 0.02), Vector3(-6, 0, 0))
 			_p(h, LowPoly.box(Vector3(0.028, 0.03, 0.3)), m.armor, Vector3(0, 0.15, 0.02))
-		"monk", "brawler":
+		"monk":
 			# 포인트 색 머리띠 + 뒤로 날리는 끝
 			_p(h, LowPoly.cyl(0.128, 0.128, 0.035, 8), m.cloth, Vector3(0, 0.07, 0.0), Vector3(-6, 0, 0))
 			_flap(h, Vector3(0.02, 0.07, 0.12), Vector3(0.035, 0.22, 0.012), m.cloth, -1.0, Vector3(40, 0, 10))

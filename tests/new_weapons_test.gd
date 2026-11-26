@@ -6,7 +6,8 @@ extends SceneTree
 ##  4) AI 가 수리검을 들면 멀리서 스스로 던진다
 ##  5) 맨몸: 주먹, 주먹, 돌려차기 연속기가 들어가고, 발차기는 다리가 올라간다
 ##  6) 봉: 마무리 풍차 돌리기가 상대를 넘어뜨린다
-##  7) 겉모습: 무기 7가지 x 색이 모두 만들어지고, 같은 색끼리 맞붙으면 상대 색이 바뀐다
+##  7) 겉모습: 무기 7가지 x 색 x 옷(부위마다 섞어서)이 모두 만들어지고, 옷은 무기를 따라가지 않으며,
+##     같은 색끼리 맞붙으면 상대 색이 바뀐다
 ## 실행: godot --headless --fixed-fps 60 -s res://tests/new_weapons_test.gd
 
 const GAME := preload("res://scenes/main.tscn")
@@ -247,12 +248,16 @@ func _staff(p: Player, ai: Duelist) -> void:
 func _looks(p: Player, _ai: Duelist) -> void:
 	if _f == 2:
 		var made := 0
-		for w in Weapons.ORDER:
+		var styles := CharacterBuild.STYLE_ORDER
+		for wi in Weapons.ORDER.size():
+			var w: String = Weapons.ORDER[wi]
 			for c in CharacterBuild.COLORS.size():
 				var b := CharacterBuild.new()
 				b.weapon = w
 				b.color = c
 				b.hair = c % CharacterBuild.HAIRS.size()
+				for pi in CharacterBuild.PART_ORDER.size():
+					b.parts[CharacterBuild.PART_ORDER[pi]] = styles[(wi + c * 3 + pi * 2) % styles.size()]
 				var r := BodyRig.new()
 				r.build = b
 				r.weapon = w
@@ -263,6 +268,18 @@ func _looks(p: Player, _ai: Duelist) -> void:
 		var a := CharacterBuild.new()
 		var o := CharacterBuild.preset("검객")
 		o.contrast_with(a)
-		_check("looks", made == Weapons.ORDER.size() * CharacterBuild.COLORS.size() and o.color != a.color,
-				"rigs=%d contrast=%d/%d" % [made, a.color, o.color])
+		# 옷은 무기를 따라가지 않는다: 무기만 바꾸면 1인칭 장갑/신발도 그대로
+		var k := CharacterBuild.new()
+		k.wear_set("heavy")
+		var g1: StandardMaterial3D = Weapons.fp_hand_mats("sword", k).glove
+		var g2: StandardMaterial3D = Weapons.fp_hand_mats("fists", k).glove
+		var free := g1.albedo_color == g2.albedo_color and k.part("feet") == "heavy"
+		# 저장했다 불러와도 부위 옷이 남는다
+		var sv := CharacterBuild.new()
+		sv.parts = {"head": "monk", "torso": "rogue", "arms": "brawler", "legs": "lancer", "feet": "shadow"}
+		var cfg := ConfigFile.new()
+		cfg.set_value("look", "parts", sv.parts)
+		var back = cfg.get_value("look", "parts", {})
+		_check("looks", made == Weapons.ORDER.size() * CharacterBuild.COLORS.size() and o.color != a.color and free and back == sv.parts,
+				"rigs=%d contrast=%d/%d weapon_free=%s" % [made, a.color, o.color, free])
 		_next()

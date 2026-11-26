@@ -530,30 +530,13 @@ static func build_model(parent: Node3D, weapon: String, left_hand := false, opts
 
 
 ## 1인칭 손 재질: 옷차림(BodyRig.OUTFIT)에 맞춘 장갑, 소매, 그리고 맨몸 발차기 다리의 신발/바지
-static func fp_hand_mats(weapon: String, b: CharacterBuild) -> Dictionary:
-	var acc := b.accent()
-	var cloth := LowPoly.mat(acc, 0.85)
-	var cloth_dark := LowPoly.mat(acc.darkened(0.38), 0.9)
-	var leather := LowPoly.mat(Color(0.3, 0.19, 0.11), 0.9)
-	var leather_dark := LowPoly.mat(Color(0.17, 0.11, 0.07), 0.9)
-	var plate := LowPoly.mat(Color(0.62, 0.65, 0.7), 0.35, 0.7)
-	var suit := LowPoly.mat(Color(0.13, 0.14, 0.17), 0.85)
-	var cream := LowPoly.mat(Color(0.88, 0.84, 0.74), 0.9)
-	var skin := LowPoly.mat(b.skin_color(), 0.75)
-	match valid(weapon):
-		"sword":
-			return {"glove": leather, "sleeve": plate, "boot": leather, "pants": cloth_dark, "wrap": cloth}
-		"greatsword":
-			return {"glove": plate, "sleeve": plate, "boot": plate, "pants": plate, "wrap": cloth}
-		"daggers":
-			return {"glove": leather_dark, "sleeve": cloth_dark, "boot": leather_dark, "pants": suit, "wrap": cloth}
-		"spear":
-			return {"glove": leather, "sleeve": cloth, "boot": leather, "pants": cloth_dark, "wrap": plate}
-		"staff":
-			return {"glove": cream, "sleeve": skin, "boot": leather, "pants": cream, "wrap": cloth}
-		"shuriken":
-			return {"glove": suit, "sleeve": cloth_dark, "boot": suit, "pants": suit, "wrap": cloth}
-	return {"glove": cream, "sleeve": skin, "boot": leather_dark, "pants": cloth_dark, "wrap": cloth}
+static func fp_hand_mats(_weapon: String, b: CharacterBuild) -> Dictionary:
+	# 무기와 상관없이 캐릭터가 고른 팔/다리/신발 모양을 따른다 (3인칭 몸과 같은 재질)
+	var m := BodyRig.make_mats(b)
+	var arm: Array = BodyRig.ARM_LOOK.get(b.part("arms"), BodyRig.ARM_LOOK.knight)
+	var leg: Array = BodyRig.LEG_LOOK.get(b.part("legs"), BodyRig.LEG_LOOK.knight)
+	return {"glove": m[arm[2]], "sleeve": m[arm[1]], "boot": m[BodyRig.FEET_LOOK.get(b.part("feet"), "leather")],
+			"pants": m[leg[0]], "wrap": m.cloth}
 
 
 ## 홈이 파인 곧은 칼날. y0 = 날이 시작하는 높이

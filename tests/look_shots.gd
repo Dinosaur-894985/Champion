@@ -106,7 +106,7 @@ func _process(_d: float) -> bool:
 		90:
 			_shot("lineup_action")
 		92:
-			# 같은 무기라도 빌드(몸집, 색, 머리)에 따라 다르다
+			# 같은 검을 들어도 옷(부위마다 따로 고름), 몸집, 색, 머리에 따라 다르다
 			for h in _holders:
 				h.queue_free()
 			_rigs.clear()
@@ -114,7 +114,12 @@ func _process(_d: float) -> bool:
 			var looks := [[0, 0, 0, 10, 10, 1], [1, 2, 1, 2, 3, 9], [3, 3, 2, 6, 6, 5], [5, 1, 3, 9, 8, 1], [6, 0, 1, 3, 3, 10]]
 			for i in looks.size():
 				var b := CharacterBuild.new()
-				b.weapon = "fists" if i % 2 == 0 else "staff"
+				b.weapon = "sword"
+				var outfits := [["heavy", "monk", "brawler", "monk", "brawler"], ["shadow", "rogue", "shadow", "rogue", "rogue"],
+						["knight", "lancer", "heavy", "knight", "heavy"], ["brawler", "brawler", "brawler", "shadow", "monk"],
+						["rogue", "monk", "lancer", "monk", "monk"]]
+				for pi in CharacterBuild.PART_ORDER.size():
+					b.parts[CharacterBuild.PART_ORDER[pi]] = outfits[i][pi]
 				b.color = looks[i][0]
 				b.skin = looks[i][1]
 				b.hair = looks[i][2]

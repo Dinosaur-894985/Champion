@@ -1,7 +1,7 @@
 extends ColorRect
 ## 캐릭터 만들기 화면: 무기를 고르고, 점수를 능력치 5개에 나눠 주고, 특수 스킬을 2개까지 고른다.
-## 오른쪽에는 내 결투사가 빙글 돌며 보인다. 색, 피부, 머리 모양을 고를 수 있다 (점수를 먹지 않는다).
-## 옷차림은 무기를 따라, 몸집은 힘/체력/민첩을 따라 바뀐다.
+## 오른쪽에는 내 결투사가 빙글 돌며 보인다. 색, 피부, 머리 모양, 그리고 부위마다 옷(머리, 몸통, 팔, 다리, 신발)을
+## 무기와 따로 고를 수 있다 (점수를 먹지 않는다). 몸집은 힘/체력/민첩을 따라 바뀐다.
 ## 저장하면 user://build.cfg 에 남아서 다음에 켜도 그대로다.
 
 signal finished(saved: bool)
@@ -23,6 +23,8 @@ var _turntable: Node3D
 var _rig: BodyRig
 var _rig_key := ""
 var _look_buttons := {}   # "color"/"skin"/"hair" → [Button]
+var _part_labels := {}    # 부위 → Label (지금 고른 모양 이름)
+var _set_i := 0
 
 
 func setup(b: CharacterBuild) -> void:
@@ -245,7 +247,7 @@ func _make_preview() -> Control:
 	col.add_theme_constant_override("separation", 8)
 	var svc := SubViewportContainer.new()
 	svc.stretch = true
-	svc.custom_minimum_size = Vector2(300, 400)
+	svc.custom_minimum_size = Vector2(300, 330)
 	col.add_child(svc)
 	_vp = SubViewport.new()
 	_vp.own_world_3d = true
@@ -283,7 +285,10 @@ func _make_preview() -> Control:
 	col.add_child(_look_row("색", "color", CharacterBuild.COLORS.size(), func(i): return CharacterBuild.COLORS[i][1]))
 	col.add_child(_look_row("피부", "skin", CharacterBuild.SKINS.size(), func(i): return CharacterBuild.SKINS[i]))
 	col.add_child(_look_row("머리", "hair", CharacterBuild.HAIRS.size(), Callable()))
-	var hint := _label("옷차림은 무기를, 몸집은 힘·체력·민첩을 따라요", 14)
+	col.add_child(_cycle_row("한 벌", "set"))
+	for p in CharacterBuild.PART_ORDER:
+		col.add_child(_cycle_row(CharacterBuild.PART_LABELS[p], p))
+	var hint := _label("옷은 무기와 따로 골라요. 몸집은 힘·체력·민첩을 따라요", 14)
 	hint.modulate = C_TEXT_DIM
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -336,6 +341,42 @@ func _look_row(title: String, key: String, count: int, swatch: Callable) -> Cont
 	return row
 
 
+## 옷 고르기 한 줄: ◀ 이름 ▶. key 가 "set" 이면 모든 부위를 한 벌로 맞춘다
+func _cycle_row(title: String, key: String) -> Control:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	var l := _label(title, 16)
+	l.custom_minimum_size = Vector2(52, 0)
+	row.add_child(l)
+	var prev := _small_button("◀", _on_part.bind(key, -1))
+	prev.custom_minimum_size = Vector2(34, 28)
+	prev.add_theme_font_size_override("font_size", 14)
+	prev.focus_mode = Control.FOCUS_NONE
+	row.add_child(prev)
+	var name_l := _label("", 15)
+	name_l.custom_minimum_size = Vector2(150, 0)
+	name_l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	row.add_child(name_l)
+	var next := _small_button("▶", _on_part.bind(key, 1))
+	next.custom_minimum_size = Vector2(34, 28)
+	next.add_theme_font_size_override("font_size", 14)
+	next.focus_mode = Control.FOCUS_NONE
+	row.add_child(next)
+	_part_labels[key] = name_l
+	return row
+
+
+func _on_part(key: String, step: int) -> void:
+	var n := CharacterBuild.STYLE_ORDER.size()
+	if key == "set":
+		_set_i = posmod(_set_i + step, n)
+		build.wear_set(CharacterBuild.STYLE_ORDER[_set_i])
+	else:
+		var i := CharacterBuild.STYLE_ORDER.find(build.part(key))
+		build.parts[key] = CharacterBuild.STYLE_ORDER[posmod(i + step, n)]
+	_refresh()
+
+
 func _on_look(key: String, i: int) -> void:
 	build.set(key, i)
 	_refresh()
@@ -346,9 +387,21 @@ func _refresh_look() -> void:
 		var cur := int(build.get(key))
 		for i in _look_buttons[key].size():
 			(_look_buttons[key][i] as Button).set_pressed_no_signal(i == cur)
+	# 옷: 모든 부위가 같으면 그 한 벌 이름, 아니면 "섞어 입음"
+	var first := build.part("head")
+	var same := true
+	for p in CharacterBuild.PART_ORDER:
+		if build.part(p) != first:
+			same = false
+		if _part_labels.has(p):
+			(_part_labels[p] as Label).text = build.part_name(p)
+	if same:
+		_set_i = CharacterBuild.STYLE_ORDER.find(first)
+	if _part_labels.has("set"):
+		(_part_labels["set"] as Label).text = CharacterBuild.SET_NAMES[_set_i] if same else "섞어 입음"
 	# 겉모습을 바꾸는 값이 바뀌었을 때만 몸을 새로 만든다
-	var key2 := "%s|%d|%d|%d|%d|%d|%d" % [build.weapon, build.color, build.skin, build.hair,
-			int(build.stats.str), int(build.stats.vit), int(build.stats.agi)]
+	var key2 := "%s|%d|%d|%d|%d|%d|%d|%s" % [build.weapon, build.color, build.skin, build.hair,
+			int(build.stats.str), int(build.stats.vit), int(build.stats.agi), str(build.parts)]
 	if key2 == _rig_key or _turntable == null:
 		return
 	_rig_key = key2
