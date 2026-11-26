@@ -379,8 +379,9 @@ func _ai_moves(p: Player, ai: Duelist) -> void:
 	# 플레이어는 가끔 뒤로 물러나 거리를 벌린다
 	# 플레이어는 가끔 뒤로 크게 물러나 거리를 벌린다
 	var st0 := ai.stats
-	if _f - int(_v.get("tp", 0)) > 90 and st0.get("move_run_thrust", 0) + st0.get("move_sweep", 0) + st0.get("move_air_slash", 0) == 0 \
-			and ai.state in ["approach", "circle", "idle"]:
+	var need: bool = st0.get("move_run_thrust", 0) + st0.get("move_sweep", 0) + st0.get("move_air_slash", 0) == 0 \
+			or st0.get("crate_kick", 0) == 0
+	if _f - int(_v.get("tp", 0)) > 90 and need and ai.state in ["approach", "circle", "idle"]:
 		_v.tp = _f
 		var away := p.global_position - ai.global_position
 		away.y = 0
