@@ -691,7 +691,10 @@ func _skills_jump_haste(player: Player) -> void:
 func _skills_iron(player: Player) -> void:
 	var ai: Duelist = _game.duelist
 	if _frame == 3:
-		player.attack_received.connect(func(r): _sk[r] = _sk.get(r, 0) + 1)
+		# 철벽을 켜기 전에 맞은 것은 따로 센다 (켜기 전 타이밍은 컴퓨터 속도에 따라 달라진다)
+		player.attack_received.connect(func(r):
+			var k: String = r if player.sm.state == "iron" else "pre_" + str(r)
+			_sk[k] = _sk.get(k, 0) + 1)
 		player.hp = 100000
 	if not ai.active:
 		return
