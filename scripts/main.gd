@@ -263,6 +263,8 @@ func _setup_inputs() -> void:
 	_bind_keys("skill2", [KEY_R])
 	_bind_keys("grab", [KEY_F])
 	_bind_keys("special", [KEY_V])
+	# 앉기/슬라이딩. 웹에서는 Ctrl+W 가 탭을 닫아 버리므로 C 만 쓴다
+	_bind_keys("crouch", [KEY_C] if OS.has_feature("web") else [KEY_C, KEY_CTRL])
 	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
 	_bind_mouse("block", MOUSE_BUTTON_RIGHT)
 

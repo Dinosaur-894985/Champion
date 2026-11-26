@@ -3,13 +3,18 @@ extends StaticBody3D
 ## 부서지는 돌기둥. 칼로 몇 번 치면 금이 가다가 쓰러진다.
 ## 위에 서 있던 사람은 떨어진다. 강한 공격(내려찍기, 차지, 낙하 찍기)은 두 번 친 만큼 부순다.
 ## 칼에 맞도록 충돌 층 2(맞을 수 있는 것)에도 들어 있다.
+## 쓰러지는 쪽(친 방향)에 있던 사람은 깔려서 크게 다치고 넘어진다. 쓰러지기 시작할 때 금이 번쩍이고
+## 땅이 울려서 피할 틈(약 0.9초)이 있다. 누가 부쉈든 깔리면 똑같이 다친다.
 
 signal broken(pillar_id: String)
 
 const HP := 5
 const STRONG := ["heavy", "charge", "plunge", "slash3", "ledge_slash"]
 
+const CRUSH_DAMAGE := 24
+
 var id := ""
+var arena: Node3D               # 깔리는 사람을 찾을 때 (Arena.fighters)
 var hp := HP
 var size := Vector3.ONE
 var _visual: Node3D
@@ -86,12 +91,59 @@ func is_broken() -> bool:
 func _break(dir: Vector3) -> void:
 	collision_layer = 0
 	broken.emit(id)
-	var axis := Vector3.UP.cross(dir.normalized() if dir.length() > 0.1 else Vector3.RIGHT).normalized()
+	var fall := Vector3(dir.x, 0, dir.z)
+	fall = fall.normalized() if fall.length() > 0.1 else Vector3.RIGHT
+	var axis := Vector3.UP.cross(fall).normalized()
+	# 쓰러질 자리에 있는 사람에게 미리 알린다 (AI 는 옆으로 피한다)
+	for f in _in_fall_zone(fall):
+		if f.has_method("on_falling_hazard"):
+			f.on_falling_hazard(axis, global_position)
 	var tw := create_tween()
 	tw.tween_property(_visual, "basis", Basis(axis, deg_to_rad(88)), 0.9).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 	tw.tween_callback(func():
-		Fx.impact(get_parent(), global_position + dir * size.y * 0.6 + Vector3.DOWN * size.y * 0.4, Vector3.UP,
+		Fx.impact(get_parent(), global_position + fall * size.y * 0.6 + Vector3.DOWN * size.y * 0.4, Vector3.UP,
 				Color(0.82, 0.72, 0.56), 40)
-		Audio.play("pillar_break", global_position))
+		Audio.play("pillar_break", global_position)
+		_crush(fall))
 	tw.tween_property(_visual, "position:y", -size.y * 0.5 - 3.0, 1.6).set_delay(0.6)
 	tw.tween_callback(func(): _visual.visible = false)
+
+
+## from 에서 쳐서 쓰러뜨리면 who 가 깔리나 (AI 가 노릴 때)
+func would_crush(from: Vector3, who: Node3D) -> bool:
+	var fall := global_position - from
+	fall.y = 0
+	if fall.length() < 0.1:
+		return false
+	return who in _in_fall_zone(fall.normalized())
+
+
+## 쓰러지는 기둥이 덮치는 땅: 밑동에서 fall 쪽으로 기둥 길이만큼, 기둥 너비 + 여유
+func _in_fall_zone(fall: Vector3) -> Array:
+	var out := []
+	if arena == null:
+		return out
+	var base := global_position - Vector3.UP * size.y * 0.5
+	var side := Vector3(-fall.z, 0, fall.x)
+	for f in arena.get("fighters"):
+		var n := f as Node3D
+		if n == null or not is_instance_valid(n) or n.get("dead"):
+			continue
+		var to := n.global_position - base
+		var along := to.dot(fall)
+		var across := absf(to.dot(side))
+		if along > 0.4 and along < size.y + 0.6 and across < size.x * 0.5 + 0.7 and to.y < 2.5 and to.y > -1.5:
+			out.append(n)
+	return out
+
+
+func _crush(fall: Vector3) -> void:
+	for n in _in_fall_zone(fall):
+		var info := {"move": "pillar", "damage": CRUSH_DAMAGE, "react": "stagger", "guard": "unblockable",
+				"dir": "", "knockdown": true, "push_add": 3.0}
+		if n.has_method("receive_attack"):
+			n.receive_attack(info, self)
+		elif n.has_method("take_hit"):
+			n.take_hit(info, fall, self)
+		if n.has_signal("combat_event"):
+			n.emit_signal("combat_event", "기둥에 깔렸다!" if n is Player else "상대가 기둥에 깔렸다!", Color(1.0, 0.6, 0.3))

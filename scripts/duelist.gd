@@ -27,6 +27,8 @@ const DASH_COST := 16.0
 const STAMINA_REGEN := 30.0
 const REGEN_DELAY := 0.8
 const BLOCK_COST := {"flinch": 12.0, "stagger": 26.0}
+const RUN_SPEED := 7.2          # 달려들 때 (플레이어 달리기와 비슷하게)
+const SLIDE_SPEED := 8.5        # 미끄러져 들어올 때
 
 # 성격 (나중에 난이도나 '거울' 모드에서 바꿀 수 있다)
 var aggression := 0.55
@@ -133,7 +135,7 @@ func _ready() -> void:
 	# 기술 능력치가 높을수록 상대 공격 방향을 잘 읽는다
 	read_skill = clampf(0.45 + 0.05 * (float(build.stats.tec) - 5.0), 0.25, 0.8)
 	collision_layer = 2
-	collision_mask = 1
+	collision_mask = 1   # 나무 상자(층 4)와는 부딪히지 않고, 가까이 가면 밀어낸다 (길찾기가 막히지 않게)
 	var col := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
 	cap.radius = 0.38
@@ -158,6 +160,7 @@ func _ready() -> void:
 		.add("plunge", _plunge_enter, _plunge_update) \
 		.add("hang", _hang_enter, _hang_update) \
 		.add("zip", _zip_enter, _zip_update) \
+		.add("kick", _kick_enter, _kick_update, _kick_exit) \
 		.add("dead")
 	_ray.collision_mask = 1
 	_build_rope()
@@ -215,6 +218,8 @@ func _physics_process(delta: float) -> void:
 	if active and not dead:
 		add_gauge(Weapons.GAUGE.regen * delta)
 	_alert = maxf(_alert - delta, 0.0)
+	_kick_cd -= delta
+	_move_cd -= delta
 	_iframes = maxf(_iframes - delta, 0.0)
 	_thrown_t = maxf(_thrown_t - delta, 0.0)
 	_hits_reset -= delta
@@ -249,6 +254,7 @@ func _physics_process(delta: float) -> void:
 	var pre_speed := Vector2(velocity.x, velocity.z).length()
 	_fall_v = velocity.y
 	move_and_slide()
+	_shove_crates()
 	_footsteps(delta)
 	_vertical_tick(delta)
 	if _thrown_t > 0.0 and is_on_wall() and pre_speed >= float(MoveSet.THROW.wall_slam_speed):
@@ -339,6 +345,8 @@ func _think() -> void:
 		_combo_left = 0
 		_start_attack("thrust")
 		return
+	if _think_movement():
+		return
 	var r := randf()
 	# 거리가 좀 벌어졌으면 가끔 차지 베기로 돌진
 	if _dist > 2.6 and _dist < 4.6 and randf() < charge_chance * (1.0 if r < aggression else 0.3):
@@ -361,9 +369,10 @@ func _think() -> void:
 			elif guard_now != AttackDir.HIGH and randf() < (_style("overhead") - 1.0) * 0.3:
 				dir = AttackDir.HIGH
 			_combo_left = 0
-			if dir == AttackDir.SIDE and randf() < combo_chance:
-				# 연속 베기: 몇 번 이어 갈지 미리 정한다 (0~2번 더)
-				_combo_left = 1 if randf() < 0.55 else 2
+			if randf() < combo_chance * (1.0 if dir == AttackDir.SIDE else 0.7):
+				# 연속기: 몇 번 이어 갈지 미리 정한다 (1~3번 더). 갈래는 이을 때마다 고른다
+				var rr := randf()
+				_combo_left = 1 if rr < 0.5 else (2 if rr < 0.85 else 3)
 			_start_attack(_move_for_dir(dir))
 	elif r < aggression + 0.25:
 		sm.go("circle")
@@ -621,6 +630,12 @@ func _windup_update(_delta: float) -> void:
 		# 힘을 모으며 천천히 다가온다
 		rig.tremble = k
 		_move = _dir * 1.4 if _dist > 2.2 else Vector3.ZERO
+	elif _attack in ["run_thrust", "sweep"] and is_on_floor():
+		# 달려들며 찌르기 / 미끄러져 들어오며 다리 베기
+		_move = _dir * (RUN_SPEED if _attack == "run_thrust" else SLIDE_SPEED) if _dist > 1.6 else _dir * 2.0
+		rig.low = 1.0 if _attack == "sweep" else 0.0
+	elif _attack == "air_slash" and not is_on_floor():
+		_move = _dir * 5.0 if _dist > 1.4 else Vector3.ZERO
 	else:
 		_move = _dir * 0.6 if _dist > 1.6 else Vector3.ZERO
 	# 속임수: 준비가 반쯤 됐을 때 한 번 정한다
@@ -685,6 +700,8 @@ func _try_feint() -> bool:
 
 func _strike_enter(_d: Dictionary) -> void:
 	var data: Dictionary = _mv(_attack)
+	if float(data.get("hop", 0.0)) > 0.0 and is_on_floor():
+		velocity.y = float(data.hop) * 0.8
 	if _attack == "special":
 		_special_strike(data)
 	rig.set_pose(data.body.strike, 30.0)
@@ -694,13 +711,15 @@ func _strike_enter(_d: Dictionary) -> void:
 	elif _attack == "grab":
 		_play("grab_whoosh")
 	else:
-		_play(_wsnd("swing_heavy" if _attack in ["heavy", "charge", "slash3"] else "swing"))
+		_play(_wsnd("swing_heavy" if _attack in ["heavy", "charge", "slash3", "spin", "cleave", "pierce"] else "swing"))
 
 
 func _strike_update(_delta: float) -> void:
 	var data: Dictionary = _mv(_attack)
 	_turn_speed = 0.5
 	_move = -global_transform.basis.z * float(data.lunge) if _dist > 1.3 else Vector3.ZERO
+	if _attack in ["run_thrust", "sweep"] and _dist > 1.3:
+		_move = -global_transform.basis.z * (RUN_SPEED if _attack == "run_thrust" else SLIDE_SPEED) * 0.7
 	if _attack == "special" and data.effect == "rush" and not _hit_done:
 		_move = -global_transform.basis.z * float(data.rush_speed)
 		_turn_speed = 1.5
@@ -718,14 +737,18 @@ func _strike_update(_delta: float) -> void:
 
 
 func _recover_enter(_d: Dictionary) -> void:
-	pass
+	rig.low = 0.0
 
 
 func _recover_update(delta: float) -> void:
 	var data: Dictionary = _mv(_attack)
 	_turn_speed = 3.0
 	rig.glow(rig.blade_mat.emission, move_toward(rig.glow_energy(), 0.0, delta * 10.0))
-	var nxt: String = data.next
+	var nxt := ""
+	if _combo_left > 0:
+		# 연속기 갈래: 상대가 막고 있는 방향은 피해서 고른다 (MoveSet.combo_next)
+		var guard_now := target.guard_dir if target.blocking else ""
+		nxt = MoveSet.combo_next(data, mind.choose_dir(guard_now))
 	var rec: float = data.ai_recover * _atk_mult()
 	if _combo_left > 0 and nxt != "" and _state_t >= rec * 0.35 and _dist < float(data.reach) + 0.9:
 		_combo_left -= 1
@@ -787,6 +810,7 @@ func _dash_update(_delta: float) -> void:
 
 func _stagger_enter(d: Dictionary) -> void:
 	_stagger_time = d.time
+	rig.low = 0.0
 	_combo_left = 0
 	_grab_wait = 0.0
 	rig.reach = 0.0
@@ -943,7 +967,7 @@ func _try_hit(data: Dictionary) -> void:
 		"react": data.react, "guard": data.get("ai_guard", data.guard),
 		"pressure": build.guard_pressure() * Weapons.stat(weapon, "pressure"),
 		"push_add": data.get("push_add", 0.0), "push": data.get("push", 0.0), "lift": data.get("lift", 2.0),
-		"dir": data.get("dir", ""),
+		"dir": data.get("dir", ""), "knockdown": data.get("knockdown", false),
 	}
 	var result := target.receive_attack(info, self)
 	if result in ["hit", "guard_broken", "wrong_guard"] and _attack != "special":
@@ -1499,6 +1523,23 @@ func _think_vertical() -> bool:
 				_combo_left = 2
 				_start_attack("slash1")
 				return true
+	# 돌기둥 너머에 상대가 서 있으면: 기둥을 쳐서 상대 쪽으로 쓰러뜨린다 (금이 많이 갔을수록 자주)
+	if _direct and stamina > 25.0:
+		for v in arena.breakables.values():
+			var bp := v as BreakablePillar
+			if bp == null or bp.is_broken():
+				continue
+			var to_b := bp.global_position - global_position
+			to_b.y = 0
+			if to_b.length() > 2.6 or not bp.would_crush(global_position, target):
+				continue
+			if randf() < (0.75 if bp.hp <= 2 else 0.3):
+				_smash = bp
+				_face = to_b.normalized()
+				_combo_left = 0
+				_start_attack("heavy" if bp.hp <= 2 else "slash1")
+				stats["pillar_drop"] = stats.get("pillar_drop", 0) + 1
+				return true
 	return false
 
 
@@ -1983,3 +2024,186 @@ func _special_strike(data: Dictionary) -> void:
 				var a := TAU * float(i) / 10.0
 				Fx.sparks(get_parent(), global_position - global_transform.basis.z * 1.6 + Vector3(cos(a), 0.1, sin(a)) * 1.4,
 						Vector3(cos(a), 0.6, sin(a)), 8, Color(1.0, 0.75, 0.35))
+
+
+
+# ---------------- 자유로운 움직임: 달려들기, 미끄러지기, 뛰어 베기, 상자 차기, 기둥 쓰러뜨리기 ----------------
+# 플레이어와 같은 동작 표(MoveSet: run_thrust, sweep, air_slash)를 쓴다.
+
+var _kick_crate: ArenaCrate = null
+var _kick_cd := 0.0
+var _kick_hit := false
+var _move_cd := 0.0
+
+
+## 거리와 주변을 보고 움직이며 쓰는 기술을 고른다. 골랐으면 true
+func _think_movement() -> bool:
+	if not is_on_floor() or _move_cd > 0.0:
+		return false
+	# 상자가 가까이 있고 상대가 적당히 떨어져 있으면 차서 날린다
+	if _kick_cd <= 0.0 and _dist > 3.5 and _dist < 13.0 and randf() < 0.35 * (0.5 + aggression):
+		var c := _crate_to_kick()
+		if c != null:
+			_kick_crate = c
+			_kick_cd = 7.0
+			sm.go("kick")
+			return true
+	if stamina < 35.0 or target.sm.state == "iron":
+		return false
+	var r := randf() * (1.2 - aggression * 0.4)
+	# 좀 떨어져 있으면: 달려들며 찌르기, 또는 미끄러져 다리 베기
+	if _dist > 3.3 and _dist < 6.5:
+		if r < 0.16:
+			_move_cd = 2.5
+			_combo_left = 0
+			_start_attack("run_thrust")
+			return true
+		if r < 0.26 and not target.is_sliding():
+			_move_cd = 3.0
+			_combo_left = 0
+			_start_attack("sweep")
+			return true
+	# 조금 더 가까우면 뛰어올라 공중 베기
+	if _dist > 2.8 and _dist < 4.4 and r < 0.1 and absf(_dy) < 0.6:
+		_move_cd = 3.0
+		_combo_left = 0
+		velocity.y = 5.4
+		_push = _dir * 5.0
+		_play("jump")
+		_start_attack("air_slash")
+		return true
+	return false
+
+
+## 찰 만한 상자: 내 가까이에 있고, 상대 쪽으로 차면 가는 길이 트여 있는 것
+func _crate_to_kick() -> ArenaCrate:
+	if arena == null:
+		return null
+	var best: ArenaCrate = null
+	var best_d := 4.5
+	for c in arena.crates:
+		var cr := c as ArenaCrate
+		if cr == null or not cr.can_pick():
+			continue
+		var to_c := cr.global_position - global_position
+		if absf(to_c.y) > 0.8:
+			continue
+		to_c.y = 0
+		var d := to_c.length()
+		var c_to_t := target.global_position - cr.global_position
+		c_to_t.y = 0
+		var ct := c_to_t.length()
+		if d < best_d and ct > 3.0 and ct < 14.0 and absf(target.global_position.y - cr.global_position.y) < 2.0:
+			_ray.from = cr.global_position + Vector3.UP * 0.2
+			_ray.to = target.global_position + Vector3.UP * 0.9
+			_ray.exclude = [get_rid(), target.get_rid(), cr.get_rid()]
+			if get_world_3d().direct_space_state.intersect_ray(_ray).is_empty():
+				best = cr
+				best_d = d
+	return best
+
+
+func _kick_enter(_d: Dictionary) -> void:
+	_kick_hit = false
+	stats["crate_kick"] = stats.get("crate_kick", 0) + 1
+
+
+func _kick_update(_delta: float) -> void:
+	if _kick_crate == null or not is_instance_valid(_kick_crate) or not _kick_crate.can_pick() or _state_t > 3.0 \
+			or absf(_kick_crate.global_position.y - global_position.y) > 1.0 \
+			or _kick_crate.global_position.distance_to(global_position) > 6.0:
+		_kick_crate = null
+		_back_to_neutral()
+		return
+	var c_to_t := target.global_position - _kick_crate.global_position
+	c_to_t.y = 0
+	var aim := c_to_t.normalized()
+	# 상자 뒤 (상대 반대쪽)에 선다
+	var stand := _kick_crate.global_position - aim * 0.95
+	var to_stand := stand - global_position
+	to_stand.y = 0
+	_face = aim
+	if not _kick_hit:
+		if to_stand.length() > 0.35:
+			_move = to_stand.normalized() * _speed() * 1.5
+			_face = to_stand.normalized()
+			sm.time = 0.0 if to_stand.length() > 0.8 else sm.time
+			return
+		_kick_hit = true
+		sm.time = 0.0
+		rig.set_pose(MoveSet.BODY_POSES.kick, 14.0)
+		rig.glow(Color(1.0, 0.55, 0.1), 2.0)
+		_play("warn_light")
+		return
+	if _state_t >= 0.28 and _kick_crate.can_kick():
+		var to_t := target.global_position + Vector3.UP * 0.9 - _kick_crate.global_position
+		var flat := Vector3(to_t.x, 0, to_t.z)
+		var speed := 15.0
+		var t := maxf(flat.length() / speed, 0.15)
+		var vy := (to_t.y + 0.5 * _gravity * t * t) / t
+		_kick_crate.kick(flat.normalized() * speed + Vector3.UP * vy, self)
+		rig.dash_pulse(Vector3(0, 0, -1))
+		_play(_wsnd("swing_heavy"))
+		combat_event.emit("상대가 상자를 찼다!", Color(1.0, 0.7, 0.4))
+		_kick_crate = null
+		_back_to_neutral()
+
+
+func _kick_exit() -> void:
+	rig.glow(rig.blade_mat.emission, 0.0)
+
+
+## 상자가 날아온다 (ArenaCrate 가 알려 준다): 막거나 옆으로 피한다
+func on_incoming_object(obj: Node3D) -> void:
+	if not active or dead:
+		return
+	await get_tree().create_timer(reaction_time, false).timeout
+	if not active or dead or not is_instance_valid(obj):
+		return
+	if not (_can_react() or state == "block"):
+		return
+	var r := randf()
+	if r < block_chance + 0.15:
+		_face = Vector3.ZERO
+		_enter_block()
+	elif r < block_chance + 0.15 + dodge_chance + 0.25:
+		_dash_dir(0.0, 1.0)
+
+
+## 기둥이 내 쪽으로 쓰러진다: 옆으로 피한다 (늘 피하지는 못한다)
+func on_falling_hazard(axis: Vector3, from: Vector3) -> void:
+	if not active or dead:
+		return
+	await get_tree().create_timer(reaction_time + 0.1, false).timeout
+	if not active or dead or state in ["stagger", "hang", "zip", "grapple"]:
+		return
+	if randf() > 0.35 + read_skill * 0.6:
+		return
+	var side := signf((global_position - from).dot(axis))
+	if side == 0.0:
+		side = 1.0
+	stats["dodge_pillar"] = stats.get("dodge_pillar", 0) + 1
+	sm.go("dash", {"vec": axis * side})
+
+
+## 걸어가다 닿은 상자는 옆으로 밀어낸다 (달려들 때는 차 버린다)
+func _shove_crates() -> void:
+	if arena == null:
+		return
+	var hv := Vector3(velocity.x, 0, velocity.z)
+	for c in arena.crates:
+		var cr := c as ArenaCrate
+		if cr == null or not cr.visible or cr.is_held():
+			continue
+		var to := cr.global_position - global_position
+		if absf(to.y - 0.45) > 0.9:
+			continue
+		to.y = 0
+		var d := to.length()
+		if d > 0.85 or d < 0.01:
+			continue
+		var away := to / d
+		if hv.length() > 6.0 and cr.can_kick() and hv.normalized().dot(away) > 0.5:
+			cr.kick(away * (hv.length() * 1.4 + 2.0) + Vector3.UP * 2.5, self)
+		else:
+			cr.nudge(away * maxf(hv.length(), 2.0) * 1.5 + hv * 0.5)

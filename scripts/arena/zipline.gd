@@ -91,4 +91,6 @@ func remove() -> void:
 	alive = false
 	var tw := create_tween()
 	tw.tween_property(self, "position:y", -40.0, 2.0).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
-	tw.tween_callback(queue_free)
+	# 지우지 않고 숨기기만 한다: 경기장과 AI 가 번호로 이 줄을 기억하고 있어서
+	# 지워 버리면 사라진 줄을 부르다 게임이 멈춘다 (alive 가 false 면 아무도 쓰지 않는다)
+	tw.tween_callback(hide)

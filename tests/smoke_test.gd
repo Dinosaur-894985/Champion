@@ -695,6 +695,8 @@ func _skills_iron(player: Player) -> void:
 		player.hp = 100000
 	if not ai.active:
 		return
+	ai._move_cd = 99.0   # 이 점검은 철벽만 본다: 달려들기/상자 차기는 쓰지 않게
+	ai._kick_cd = 99.0
 	var to_ai := ai.global_position - player.global_position
 	to_ai.y = 0
 	# 등을 돌리고 있어도 철벽은 막아야 한다

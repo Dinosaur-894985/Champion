@@ -101,10 +101,18 @@ const JUMP_LINKS := [["step1", "step2"], ["step2", "step3"], ["step3", "obelisk_
 ## 높이가 같아 걸어서 이어지는 구조물 (다리 ↔ 기둥)
 const TOP_LINKS := [["bridge_n", "spire_nw"], ["bridge_n", "spire_ne"], ["bridge_s", "spire_sw"], ["bridge_s", "spire_se"]]
 
+## 차고 던질 수 있는 나무 상자 자리 (바닥 높이 0). 가운데와 둘째 고리에 흩어 둔다.
+const CRATES := [
+	Vector3(-2.6, 0, 3.2), Vector3(2.8, 0, -3.0), Vector3(-5.6, 0, -2.4), Vector3(5.8, 0, 2.6),
+	Vector3(-9.6, 0, 5.2), Vector3(9.6, 0, -5.6), Vector3(-3.0, 0, -11.0), Vector3(3.0, 0, 11.0),
+	Vector3(-17.5, 0, -6.0), Vector3(17.5, 0, 6.5),
+]
+
 ## 낭떠러지에 떨어진 뒤 다시 서는 자리
 const SAFE_SPOTS := [Vector3(0, 0.1, 4.5), Vector3(0, 0.1, -4.5), Vector3(-2.2, 0.1, 0), Vector3(2.2, 0.1, 0)]
 
 var fighters: Array = []        # 플레이어와 AI (Game 이 넣어 준다)
+var crates: Array[ArenaCrate] = []   # 차고 던질 수 있는 나무 상자
 var director: ArenaDirector
 var lifts: Array[ArenaLift] = []
 var ziplines: Array[Zipline] = []
@@ -155,6 +163,13 @@ func _ready() -> void:
 		ziplines.append(zl)
 	_build_backdrop()
 	_build_nav()
+	for i in CRATES.size():
+		var c := ArenaCrate.new()
+		c.name = "Crate%d" % i
+		c.arena = self
+		add_child(c)
+		c.setup(CRATES[i] + Vector3.UP * (ArenaCrate.SIZE * 0.5 + 0.02), _mats)
+		crates.append(c)
 	director = ArenaDirector.new()
 	director.arena = self
 	add_child(director)
@@ -428,6 +443,7 @@ func _build_block(b: Dictionary) -> void:
 		var bp := BreakablePillar.new()
 		_cur.add_child(bp)
 		bp.setup(b.id, center, size, _mats)
+		bp.arena = self
 		bp.broken.connect(_on_pillar_broken)
 		breakables[b.id] = bp
 		return
@@ -847,6 +863,9 @@ func is_doomed(p: Vector3) -> bool:
 ## 짚라인: 발 위치에서 손이 닿는 줄이 있으면 [줄, 위치], 없으면 []
 func zipline_near(feet: Vector3) -> Array:
 	for z in ziplines:
+		# 무너져 사라진 줄은 건너뛴다 (사라진 뒤에 부르면 게임이 멈출 수 있다)
+		if not is_instance_valid(z):
+			continue
 		var t := z.grab_t(feet)
 		if t >= 0.0:
 			return [z, t]
