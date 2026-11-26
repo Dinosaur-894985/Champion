@@ -112,6 +112,12 @@ WEAPONS = {
     "greatsword": {"swing": (0.42, 240, 1100, 280, 0.9), "clash": (610, [1, 2.21, 3.45, 4.9, 6.3], [4, 6, 9, 13, 18], 1.3)},
     "daggers": {"swing": (0.15, 1500, 5200, 2000, 1.6), "clash": (2150, [1, 2.47, 3.9, 5.6], [14, 18, 26, 35], 0.45)},
     "spear": {"swing": (0.30, 800, 2100, 1100, 4.0), "clash": (2600, [1, 2.3, 3.8], [30, 40, 55], 0.35)},
+    # 봉: 굵은 나무가 공기를 가르는 낮은 '훙'. 부딪히면 나무끼리 '딱'
+    "staff": {"swing": (0.32, 380, 1500, 520, 1.0), "clash": (480, [1, 2.6, 4.1], [40, 50, 70], 0.25)},
+    # 수리검: 짧고 날카로운 '쉭'. 부딪히면 작은 쇠가 '팅'
+    "shuriken": {"swing": (0.13, 1900, 6200, 2600, 1.8), "clash": (3300, [1, 2.71, 4.4], [26, 34, 44], 0.3)},
+    # 맨몸: 주먹이 바람을 가르는 '훅'. 막으면 팔뚝에 '퍽'
+    "fists": {"swing": (0.15, 450, 1700, 650, 0.9), "clash": (0, [], [], 0.2)},
 }
 
 
@@ -131,6 +137,13 @@ def make_swing(w, heavy):
             x += sweep_sine(dd, 900 * k, 1500 * k) * bell(dd, 0.55, 3) * 0.12
         if w == "sword":
             x += sweep_sine(dd, 1100 * k, 1700 * k) * bell(dd, 0.5, 4) * 0.05
+        if w == "staff":
+            # 봉 끝이 그리는 큰 원: 두 번 겹쳐 '후웅'
+            x = mix(x, at(whoosh(rng, dd * 0.7, f0 * 0.8, f1 * 0.9, f2 * 0.8, q) * 0.45, dd * 0.25))
+            x += sweep_sine(dd, 85, 140) * bell(dd, 0.45, 2) * 0.35
+        if w == "fists":
+            # 옷자락이 펄럭이는 소리 + 짧은 숨
+            x = mix(x, bp(noise(dd, rng), 300, 1400) * bell(dd, 0.3, 3) * 0.35)
         if w == "daggers" and i == 2:
             # 두 손이 연달아: 휙휙
             x = mix(x, at(whoosh(rng, dd * 0.9, f0 * 1.1, f1 * 1.1, f2, q), dd * 0.45) * 0.8)
@@ -144,6 +157,13 @@ def make_clash(w):
     base, ratios, decays, d = WEAPONS[w]["clash"]
 
     def fn(rng, i):
+        if w == "staff":
+            f = base * rng.uniform(0.92, 1.08)
+            wood = modal(0.25, [f, f * 2.6, f * 4.1, f * 6.3], [40, 50, 70, 90], [1, 0.6, 0.35, 0.2], rng)
+            return reverb(mix(wood * 1.5, crack(rng, 0.03, 1500, 150) * 0.8, body_thump(rng, 0.15, 220, 90, 35, 25) * 0.4), 0.5, 0.1, rng)
+        if w == "fists":
+            x = mix(body_thump(rng, 0.2, 210, 80, 32, 22), bp(noise(0.08, rng), 600, 3500) * expenv(0.08, 45) * 0.8)
+            return reverb(x, 0.4, 0.08, rng)
         b = base * rng.uniform(0.96, 1.04)
         x = metal(rng, d, b, ratios, decays, [1, 0.7, 0.5, 0.35, 0.2][: len(ratios)], 0.7, 0.35)
         if w == "greatsword":
@@ -167,6 +187,17 @@ def make_hit(w):
         elif w == "daggers":
             x = body_thump(rng, 0.18, 260, 90, 40, 26) * 0.7
             x = mix(x, crack(rng, 0.03, 3500, 180), at(crack(rng, 0.03, 3000, 200) * 0.5, 0.05 if i == 1 else 0.0))
+        elif w == "staff":
+            # 나무로 후려치는 '퍽!'
+            x = body_thump(rng, 0.32, 170, 50, 26, 13) * 1.1
+            x = mix(x, modal(0.12, [520 * rng.uniform(0.9, 1.1), 1350], [45, 60], [0.7, 0.35], rng), crack(rng, 0.04, 1800, 120) * 0.7)
+        elif w == "shuriken":
+            x = body_thump(rng, 0.15, 280, 110, 45, 30) * 0.6
+            x = mix(x, crack(rng, 0.025, 4200, 220), bp(noise(0.06, rng), 3000, 8000) * expenv(0.06, 60) * 0.5)
+        elif w == "fists":
+            # 주먹이 꽂히는 둔탁한 '퍽' + 살갗 치는 '찰싹'
+            x = drive(body_thump(rng, 0.3, 160, 45, 24, 12) * 1.3, 2.0)
+            x = mix(x, bp(noise(0.05, rng), 1200, 6000) * expenv(0.05, 70) * 0.9, crack(rng, 0.03, 2200, 160) * 0.4)
         elif w == "spear":
             x = body_thump(rng, 0.26, 200, 60, 30, 16)
             x = mix(x, modal(0.1, [380, 980], [50, 60], [0.6, 0.3], rng), bp(noise(0.1, rng), 2500, 7000) * expenv(0.1, 40) * 0.6)
@@ -274,6 +305,43 @@ def build():
     add("sp_rush", lambda r, i: reverb(mix(whoosh(r, 0.9, 250, 2400, 600, 0.8, 0.25) * 1.2,
                                            lp(noise(0.9, r), 400) * bell(0.9, 0.3, 1) * 0.7,
                                            sweep_sine(0.9, 90, 60) * bell(0.9, 0.2, 1) * 0.4), 0.9, 0.25, r), 1, vol=0.0)
+
+    # 새 무기 필살기
+    def flurry(r, i):
+        parts = [at(whoosh(r, 0.18, 400, 1700, 600, 1.0, 0.45) * (0.7 + 0.06 * j), j * 0.12) for j in range(6)]
+        parts.append(at(body_thump(r, 0.4, 150, 45, 22, 10) * 0.9, 0.66))
+        return reverb(mix(*parts), 0.8, 0.2, r)
+    add("sp_flurry", flurry, 1, vol=0.0)
+
+    def storm(r, i):
+        parts = []
+        for j in range(8):
+            d = 0.22
+            spin = 0.6 + 0.4 * np.abs(np.sin(2 * np.pi * (38 + j * 3) * T(d)))
+            parts.append(at(bp(noise(d, r), 2500, 9000) * spin * ad(d, 0.01, 12) * 0.6, j * 0.06))
+        parts.append(svf(noise(0.8, r), np.geomspace(800, 6000, n_of(0.8)), 2.0) * bell(0.8, 0.3, 1.2) * 0.4)
+        return reverb(mix(*parts), 0.9, 0.25, r)
+    add("sp_storm", storm, 1, vol=-1.0)
+
+    def takedown(r, i):
+        grab = mix(*(at(bp(noise(0.07, r), 700, 3500) * ad(0.07, 0.005, 40) * (1 - j * 0.25), j * 0.04) for j in range(3)))
+        swing = at(whoosh(r, 0.35, 200, 1200, 300, 0.9, 0.3), 0.08)
+        slam = at(drive(body_thump(r, 0.8, 110, 30, 14, 6) * 1.5, 2.5), 0.36)
+        dust = at(lp(noise(0.5, r), 2200) * expenv(0.5, 10) * 0.7, 0.37)
+        return reverb(mix(grab, swing, slam, dust), 1.0, 0.2, r)
+    add("sp_takedown", takedown, 1, vol=1.0)
+
+    # 수리검: 던질 때 '휘리릭' (빙글빙글 도는 소리), 꽂힐 때 '탁', 맞을 때 '퍽'
+    def sh_throw(r, i):
+        d = 0.32
+        spin = 0.5 + 0.5 * np.abs(np.sin(2 * np.pi * (30 + 4 * i) * T(d)))
+        x = bp(noise(d, r), 2200, 8000) * spin * ad(d, 0.006, 9) * 0.9
+        return mix(x, whoosh(r, 0.12, 1500, 5000, 2500, 1.6, 0.3) * 0.6)
+    add("shuriken_throw", sh_throw, 3, vol=-5.0)
+    add("shuriken_stick", lambda r, i: mix(modal(0.15, [700 * r.uniform(0.9, 1.1), 1900], [40, 60], [0.8, 0.3], r),
+                                            modal(0.4, [4100, 6300], [12, 18], [0.25, 0.12], r), crack(r, 0.02, 3000, 200) * 0.6), 2, vol=-6.0)
+    add("shuriken_hit", lambda r, i: reverb(mix(body_thump(r, 0.2, 260, 90, 40, 26) * 0.8, crack(r, 0.03, 3800, 200) * 0.8,
+                                                bp(noise(0.06, r), 2500, 7000) * expenv(0.06, 55) * 0.5), 0.3, 0.06, r), 2, vol=-3.0)
 
     # 이동
     def step(r, i):

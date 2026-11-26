@@ -265,40 +265,56 @@ func _build_sword() -> void:
 	camera.add_child(_weapon_root)
 	_weapon_pivot = Node3D.new()
 	_weapon_root.add_child(_weapon_pivot)
+	# 1인칭 손: 옷차림에 맞는 장갑과 소매 (캐릭터 색)
+	var hm := Weapons.fp_hand_mats(weapon, build)
+	var opts := {"accent": build.accent(), "skin": build.skin_color(), "glove": hm.glove, "sleeve": hm.sleeve}
 
-	var steel := LowPoly.mat(Color(0.78, 0.80, 0.84), 0.28, 0.85)
-	# 차지할 때 칼날이 빛난다 (빛 설정은 처음부터 켜 두고 세기만 바꾼다 → 멈칫 없음)
-	steel.emission_enabled = true
-	steel.emission = Color(1.0, 0.72, 0.3)
-	steel.emission_energy_multiplier = 0.0
-	_blade_mat = steel
-	var edge := LowPoly.mat(Color(0.92, 0.94, 0.97), 0.18, 0.9)
-	var brass := LowPoly.mat(Color(0.72, 0.55, 0.25), 0.4, 0.8)
-	var leather := LowPoly.mat(Color(0.28, 0.16, 0.10), 0.9)
+	if weapon == "fists":
+		# 맨몸: 두 주먹. 오른 주먹은 칼 자리(_weapon_pivot)를 따르고, 왼 주먹은 거울 자리에서 손에 따라 움직인다
+		_fist_r = Node3D.new()
+		_weapon_pivot.add_child(_fist_r)
+		var base_r := Node3D.new()
+		base_r.rotation_degrees = Vector3(6, 10, -12)
+		_fist_r.add_child(base_r)
+		var fr := Weapons.build_model(base_r, weapon, false, opts)
+		_blade_mat = fr.mat
+		_blade_tip = fr.tip
+		_make_left_root()
+		var base_l := Node3D.new()
+		base_l.rotation_degrees = Vector3(6, -10, 12)
+		_left_pivot.add_child(base_l)
+		var fl := Weapons.build_model(base_l, weapon, true, opts)
+		_left_glow = fl.mat
+		_build_kick_leg(hm)
+		_trail = MeshInstance3D.new()
+		_trail.mesh = LowPoly.box(Vector3(0.001, 0.001, 0.001))
+		_trail.material_override = StandardMaterial3D.new()
+		_weapon_pivot.add_child(_trail)
+		return
 
 	# 무기는 손잡이가 기준점, 날은 +Y 방향으로 뻗는다. 모양은 Weapons.build_model.
 	var sword := Node3D.new()
 	sword.rotation_degrees = Vector3(-62, 8, -8)
 	_weapon_pivot.add_child(sword)
-	var model := Weapons.build_model(sword, weapon)
+	var model := Weapons.build_model(sword, weapon, false, opts)
 	_blade_mat = model.mat
 	_blade_tip = model.tip
 	var blade_len: float = model.len
 	if weapon == "spear":
 		# 창은 자루가 길어 손을 조금 더 뒤로, 날이 화면 가운데로
 		sword.position = Vector3(0, -0.35, 0.1)
-	elif weapon == "daggers":
-		# 왼손 단검: 오른손 움직임을 거울처럼 따라한다
-		_left_root = Node3D.new()
-		_left_root.position = Vector3(-WEAPON_REST.x, WEAPON_REST.y, WEAPON_REST.z)
-		_left_root.scale = Vector3.ONE * 0.72
-		camera.add_child(_left_root)
-		_left_pivot = Node3D.new()
-		_left_root.add_child(_left_pivot)
+	elif weapon == "staff":
+		# 봉은 가운데를 쥔다: 위쪽 끝이 화면 가운데로, 아래쪽 끝은 화면 밖으로
+		sword.position = Vector3(-0.04, 0.02, 0.0)
+	elif weapon in ["daggers", "shuriken"]:
+		# 왼손에도 하나: 오른손 움직임을 거울처럼 따라한다
+		_make_left_root()
 		var lsword := Node3D.new()
 		lsword.rotation_degrees = Vector3(-62, -8, 8)
 		_left_pivot.add_child(lsword)
-		Weapons.build_model(lsword, weapon, true)
+		Weapons.build_model(lsword, weapon, true, opts)
+	if weapon == "shuriken":
+		_held_star = model.root.get_child(0)
 
 	# 휘두를 때 남는 잔상
 	_trail = MeshInstance3D.new()
@@ -311,6 +327,129 @@ func _build_sword() -> void:
 	_trail.material_override = tm
 	_trail.position = _blade_tip.position - Vector3(0, blade_len * 0.08, 0)
 	sword.add_child(_trail)
+
+
+func _make_left_root() -> void:
+	_left_root = Node3D.new()
+	_left_root.position = Vector3(-WEAPON_REST.x, WEAPON_REST.y, WEAPON_REST.z)
+	_left_root.scale = Vector3.ONE * 0.72
+	camera.add_child(_left_root)
+	_left_pivot = Node3D.new()
+	_left_root.add_child(_left_pivot)
+
+
+# ---------------- 1인칭 맨몸: 주먹 두 개와 차는 다리 ----------------
+
+var _fist_r: Node3D            # 오른 주먹 (왼손 동작 동안은 제자리에 둔다)
+var _left_glow: StandardMaterial3D
+var _held_star: Node3D         # 수리검: 손에 쥔 한 장 (던지면 잠깐 사라졌다 다시 나온다)
+var _kick_leg: Node3D
+var _leg_amt := 0.0
+var _leg_target := 0.0
+var _leg_style := "kick"
+const LEG_HIDDEN := Vector3(0.18, -1.25, 0.15)
+
+
+func _build_kick_leg(hm: Dictionary) -> void:
+	_kick_leg = Node3D.new()
+	_kick_leg.position = LEG_HIDDEN
+	_kick_leg.visible = false
+	camera.add_child(_kick_leg)
+	# 발끝이 앞(-Z), 정강이가 뒤 아래로 이어진다
+	LowPoly.part(_kick_leg, LowPoly.box(Vector3(0.13, 0.1, 0.26)), hm.boot, Vector3(0, 0, -0.04))
+	LowPoly.part(_kick_leg, LowPoly.box(Vector3(0.11, 0.05, 0.08)), hm.boot, Vector3(0, 0.0, -0.18), Vector3(-15, 0, 0))
+	LowPoly.part(_kick_leg, LowPoly.cyl(0.085, 0.07, 0.5, 7), hm.pants, Vector3(0, -0.12, 0.3), Vector3(-70, 0, 0))
+	LowPoly.part(_kick_leg, LowPoly.cyl(0.075, 0.075, 0.05, 7), hm.wrap, Vector3(0, -0.02, 0.1), Vector3(-70, 0, 0))
+
+
+## 지금 동작을 어느 손으로 하나 ("l", "r", "both")
+func _cur_hand() -> String:
+	if sm.state == "attack" and _move != "":
+		return str(_mv(_move).get("hand", "both"))
+	if sm.state == "special" and not _sp.is_empty():
+		return str(_sp.get("hand", "both"))
+	return "both"
+
+
+func _update_hands(delta: float) -> void:
+	if _left_pivot == null:
+		return
+	var rp := _weapon_pivot.rotation
+	var pp := _weapon_pivot.position
+	var mirror := Transform3D(Basis.from_euler(Vector3(rp.x, -rp.y, -rp.z)), Vector3(-pp.x, pp.y, pp.z))
+	var wr := _weapon_root.position
+	_left_root.position = Vector3(-wr.x, wr.y, wr.z)
+	if weapon != "fists":
+		_left_pivot.transform = mirror
+		return
+	var hand := _cur_hand()
+	var k := clampf(delta * 22.0, 0.0, 1.0)
+	# 왼손 동작이면 오른 주먹은 지키는 자리에, 오른손 동작이면 왼 주먹이 지키는 자리에 남는다
+	var r_t := Transform3D.IDENTITY if hand != "l" else _weapon_pivot.transform.affine_inverse()
+	var l_t := mirror if hand != "r" else Transform3D(Basis.from_euler(Vector3(deg_to_rad(8), 0, 0)), Vector3(0.02, 0.08, 0.06))
+	_fist_r.transform = _fist_r.transform.interpolate_with(r_t, k) if hand != "l" else r_t
+	_left_pivot.transform = _left_pivot.transform.interpolate_with(l_t, k)
+	_left_glow.emission_energy_multiplier = _blade_mat.emission_energy_multiplier
+	_left_glow.emission = _blade_mat.emission
+	# 발차기: 화면 아래에서 다리가 올라와 앞으로 뻗는다
+	var limb := ""
+	if sm.state == "attack" and _move != "":
+		limb = str(_mv(_move).get("limb", ""))
+	_leg_target = 0.0
+	if limb.begins_with("kick"):
+		_leg_style = limb
+		_leg_target = {"windup": 0.35, "active": 1.0, "recover": 0.6 if _attack_timer > _mv(_move).recover * 0.5 else 0.0}.get(_attack_phase, 0.0)
+	_leg_amt = move_toward(_leg_amt, _leg_target, delta * (9.0 if _leg_target > _leg_amt else 5.0))
+	_kick_leg.visible = _leg_amt > 0.02
+	if _kick_leg.visible:
+		var ext := Vector3(0.05, -0.5, -0.78)
+		var yaw := 0.0
+		match _leg_style:
+			"kick_round":
+				# 돌려차기: 오른쪽 바깥에서 안쪽으로 휘감아 들어온다
+				ext = Vector3(lerpf(0.75, -0.05, clampf(_leg_amt * 1.4 - 0.3, 0, 1)), -0.42, -0.7)
+				yaw = lerpf(-60.0, 15.0, _leg_amt)
+			"kick_low":
+				ext = Vector3(0.1, -0.85, -0.75)
+		var e := _leg_amt * _leg_amt * (3.0 - 2.0 * _leg_amt)
+		_kick_leg.position = LEG_HIDDEN.lerp(ext, e)
+		_kick_leg.rotation_degrees = Vector3(lerpf(-35.0, 8.0, e), yaw, 0)
+
+
+## 수리검이 어디에 닿았는지 (Projectile 이 알려 준다)
+func on_projectile_result(result: String, info: Dictionary, _body: Node3D) -> void:
+	match result:
+		"hit", "guard_broken", "wrong_guard":
+			if info.get("move", "") != "special":
+				add_gauge(float(info.damage) * Weapons.GAUGE.dealt)
+			_shake = maxf(_shake, 0.15)
+		"blocked", "parried":
+			combat_event.emit("수리검이 막혔다", Color(0.85, 0.85, 0.85))
+
+
+## 수리검을 던진다 (화면 가운데로). 앞쪽 가까이에 상대가 있으면 살짝 따라 휜다
+func _throw_shuriken(count: int, spread_deg: float, speed: float, homing: float, info: Dictionary, only := -1) -> void:
+	var fwd := -camera.global_transform.basis.z
+	var right := camera.global_transform.basis.x
+	var from := camera.global_position + fwd * 0.45 + right * 0.12 - camera.global_transform.basis.y * 0.08
+	var aim: Node3D = null
+	if opponent and is_instance_valid(opponent) and not opponent.get("dead"):
+		var to := opponent.global_position + Vector3.UP * 1.15 - camera.global_position
+		if to.length() < 32.0 and fwd.dot(to.normalized()) > cos(deg_to_rad(16.0)):
+			aim = opponent
+	for i in count:
+		if only >= 0 and i != only:
+			continue
+		var a := 0.0
+		if count > 1:
+			a = lerpf(-spread_deg * 0.5, spread_deg * 0.5, float(i) / float(count - 1))
+		var dir := fwd.rotated(Vector3.UP, deg_to_rad(-a))
+		Projectile.launch(get_parent(), from, dir, speed, info, self, aim if (count == 1 or absf(a) < 1.0 or homing > 3.0) else null, homing)
+	if _held_star:
+		_held_star.visible = false
+		get_tree().create_timer(0.16).timeout.connect(func():
+			if is_instance_valid(_held_star):
+				_held_star.visible = true)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -457,13 +596,7 @@ func _physics_process(delta: float) -> void:
 
 	if controls_enabled and not dead:
 		add_gauge(Weapons.GAUGE.regen * delta)
-	if _left_pivot:
-		var rp := _weapon_pivot.rotation
-		_left_pivot.rotation = Vector3(rp.x, -rp.y, -rp.z)
-		var pp := _weapon_pivot.position
-		_left_pivot.position = Vector3(-pp.x, pp.y, pp.z)
-		var wr := _weapon_root.position
-		_left_root.position = Vector3(-wr.x, wr.y, wr.z)
+	_update_hands(delta)
 	var trail_mat: StandardMaterial3D = _trail.material_override
 	trail_mat.albedo_color.a = move_toward(trail_mat.albedo_color.a, 0.35 if _attack_phase == "active" else 0.0, delta * 4.0 if _attack_phase != "active" else 99.0)
 	_update_camera(delta, on_floor, _sprinting)
@@ -578,7 +711,7 @@ func _cast(from: Vector3, dir: Vector3) -> Dictionary:
 func _climb_enter(_d: Dictionary) -> void:
 	_climb_used = true
 	_ledge_y = -INF
-	_pose_to(MoveSet.FP_POSES.climb, 0.12)
+	_pose_to(Weapons.fp_pose(weapon, "climb"), 0.12)
 	_play("climb")
 
 
@@ -620,7 +753,7 @@ func _climb_update(delta: float) -> void:
 
 func _climb_exit() -> void:
 	_mantle_attack = ""
-	_pose_to(MoveSet.FP_POSES.rest, 0.18)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.18)
 
 
 func _wallrun_enter(d: Dictionary) -> void:
@@ -633,7 +766,7 @@ func _wallrun_enter(d: Dictionary) -> void:
 		_run_t = -_run_t
 	velocity.y = maxf(velocity.y, float(t.lift))
 	_use_stamina(float(t.cost))
-	_pose_to(MoveSet.FP_POSES.wallrun, 0.12)
+	_pose_to(Weapons.fp_pose(weapon, "wallrun"), 0.12)
 	_play("wall_kick", 1.1, -3.0)
 	_step_dist = 0.0
 
@@ -659,7 +792,7 @@ func _wallrun_update(delta: float) -> void:
 
 
 func _wallrun_exit() -> void:
-	_pose_to(MoveSet.FP_POSES.rest, 0.18)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.18)
 
 
 func is_on_wall_move() -> bool:
@@ -693,6 +826,10 @@ func _rest_pos() -> Vector3:
 			return WEAPON_REST + Vector3(0.02, -0.06, 0.02)
 		"spear":
 			return WEAPON_REST + Vector3(0.0, -0.02, 0.06)
+		"staff":
+			return WEAPON_REST + Vector3(-0.02, -0.04, 0.04)
+		"fists":
+			return WEAPON_REST + Vector3(-0.07, 0.11, 0.06)
 	return WEAPON_REST
 
 
@@ -747,7 +884,7 @@ func _tween_pose(tw: Tween, pose: Array, time: float, trans := Tween.TRANS_SINE,
 
 func _block_enter(_d: Dictionary) -> void:
 	_guard_t = 0.0
-	_pose_to(MoveSet.FP_POSES[MoveSet.block_pose(guard_dir)], 0.08)
+	_pose_to(Weapons.fp_pose(weapon, MoveSet.block_pose(guard_dir)), 0.08)
 
 
 ## 오른쪽 클릭을 눌렀을 때: 마우스를 움직이던 쪽으로 막는다.
@@ -769,7 +906,7 @@ func set_guard(dir: String) -> void:
 	guard_dir = dir
 	if blocking:
 		_guard_t = 0.0
-		_pose_to(MoveSet.FP_POSES[MoveSet.block_pose(guard_dir)], 0.06)
+		_pose_to(Weapons.fp_pose(weapon, MoveSet.block_pose(guard_dir)), 0.06)
 		if changed_dir:
 			_play("guard_shift")
 	if changed_dir:
@@ -799,7 +936,7 @@ func _try_feint() -> bool:
 	_queued = ""
 	_press_owner = ""
 	sm.go("free")
-	_pose_to(MoveSet.FP_POSES.rest, 0.08)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.08)
 	combat_event.emit("속임수", Color(0.85, 0.75, 1.0))
 	feinted.emit()
 	return true
@@ -808,7 +945,7 @@ func _try_feint() -> bool:
 func _block_update(_delta: float) -> void:
 	if not Input.is_action_pressed("block") or not _can_act():
 		sm.go("free")
-		_pose_to(MoveSet.FP_POSES.rest, 0.14)
+		_pose_to(Weapons.fp_pose(weapon, "rest"), 0.14)
 
 
 # ---------------- 달리기 / 피하기 ----------------
@@ -858,7 +995,7 @@ func _dash_enter(d: Dictionary) -> void:
 	_since_dash = 0.0
 	_counter_used = false
 	_use_stamina(DASH_COST)
-	_pose_to(MoveSet.FP_POSES.rest, 0.12)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.12)
 	camera.fov += 8.0
 	_play("dash", 1.0 + _dash_local.x * 0.04)
 
@@ -1050,7 +1187,7 @@ func _attack_update(delta: float) -> void:
 		"active":
 			if _move == "grab":
 				_check_grab(data)
-			else:
+			elif not data.has("projectile"):
 				_check_hits(data)
 			if sm.state == "attack" and _attack_timer <= 0.0:
 				_attack_phase = "recover"
@@ -1079,8 +1216,15 @@ func _enter_active(data: Dictionary) -> void:
 	_attack_timer = data.active
 	if _move == "grab":
 		_play("grab_whoosh")
+	elif data.has("projectile"):
+		_play("shuriken_throw", randf_range(0.95, 1.08))
+		var pr: Dictionary = data.projectile
+		var info := _hit_info.duplicate()
+		info.damage = int(round(float(info.damage) * build.damage_mult() * vkit.damage_mult()))
+		info.power = vkit.powered()
+		_throw_shuriken(int(pr.count), float(pr.spread), float(pr.speed), float(pr.get("homing", 0.0)), info)
 	else:
-		_play(_wsnd("swing_heavy" if _move in ["heavy", "charge", "slash3", "plunge"] else "swing"))
+		_play(_wsnd("swing_heavy" if _move in ["heavy", "charge", "slash3", "plunge"] or str(data.get("limb", "")).begins_with("kick") else "swing"))
 	var fwd := -transform.basis.z
 	velocity += fwd * float(data.lunge)
 	_kill_weapon_tween()
@@ -1119,7 +1263,7 @@ func _swing_feel(data: Dictionary) -> void:
 func _tween_back(time: float) -> void:
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
-	_tween_pose(_weapon_tween, MoveSet.FP_POSES.rest, time, Tween.TRANS_SINE, Tween.EASE_IN_OUT)
+	_tween_pose(_weapon_tween, Weapons.fp_pose(weapon, "rest"), time, Tween.TRANS_SINE, Tween.EASE_IN_OUT)
 
 
 # ---------------- 잡기 (F) ----------------
@@ -1352,15 +1496,15 @@ func _stagger_enter(d: Dictionary) -> void:
 	_queued = ""
 	_buffer_dir = "none"
 	if _stun_kind == "flinch":
-		_pose_to(MoveSet.FP_POSES.rest, 0.15)
+		_pose_to(Weapons.fp_pose(weapon, "rest"), 0.15)
 	else:
-		_pose_to(MoveSet.FP_POSES.stagger, 0.12)
+		_pose_to(Weapons.fp_pose(weapon, "stagger"), 0.12)
 
 
 func _stagger_update(_delta: float) -> void:
 	if sm.time >= _stun_time:
 		sm.go("free")
-		_pose_to(MoveSet.FP_POSES.rest, 0.22)
+		_pose_to(Weapons.fp_pose(weapon, "rest"), 0.22)
 
 
 func _react(kind: String, from_dir: Vector3) -> void:
@@ -1655,7 +1799,7 @@ func _cancel_action() -> void:
 	if sm.is_in(["attack", "charge", "block", "climb", "wallrun"]):
 		_queued = ""
 		sm.go("free")
-		_pose_to(MoveSet.FP_POSES.rest, 0.1)
+		_pose_to(Weapons.fp_pose(weapon, "rest"), 0.1)
 
 
 # --- 점멸 ---
@@ -1739,7 +1883,7 @@ func _grapple_enter(d: Dictionary) -> void:
 	_grap_point = d.point
 	_grap_body = d.body
 	_rope.visible = true
-	_pose_to(MoveSet.FP_POSES.wallrun, 0.1)
+	_pose_to(Weapons.fp_pose(weapon, "wallrun"), 0.1)
 	_play("grapple")
 	_update_rope()
 
@@ -1765,7 +1909,7 @@ func _grapple_update(_delta: float) -> void:
 
 func _grapple_exit() -> void:
 	_rope.visible = false
-	_pose_to(MoveSet.FP_POSES.rest, 0.15)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.15)
 
 
 func _update_rope() -> void:
@@ -1783,7 +1927,7 @@ func _update_rope() -> void:
 # --- 철벽 ---
 
 func _iron_enter(_d: Dictionary) -> void:
-	_pose_to(MoveSet.FP_POSES.block, 0.06)
+	_pose_to(Weapons.fp_pose(weapon, "block"), 0.06)
 	_blade_mat.emission = Color(1.0, 0.85, 0.4)
 	_blade_mat.emission_energy_multiplier = 1.6
 	combat_event.emit("철벽!", Color(1.0, 0.85, 0.4))
@@ -1798,7 +1942,7 @@ func _iron_update(_delta: float) -> void:
 func _iron_exit() -> void:
 	_blade_mat.emission = Color(1.0, 0.72, 0.3)
 	_blade_mat.emission_energy_multiplier = 0.0
-	_pose_to(MoveSet.FP_POSES.rest, 0.15)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.15)
 
 
 # ---------------- 높이: 낙하 찍기, 공중 베기, 난간 매달리기, 짚라인, 밀려 떨어지기 ----------------
@@ -1927,7 +2071,7 @@ func _plunge_impact() -> void:
 
 
 func _plunge_exit() -> void:
-	_pose_to(MoveSet.FP_POSES.rest, 0.2)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.2)
 
 
 # --- 난간 매달리기 ---
@@ -1960,7 +2104,7 @@ func _hang_enter(d: Dictionary) -> void:
 	global_position = Vector3(p.x, float(d.y) - 1.55, p.z) + n * 0.42
 	velocity = Vector3.ZERO
 	vkit.reset_fall()
-	_pose_to(MoveSet.FP_POSES.hang, 0.1)
+	_pose_to(Weapons.fp_pose(weapon, "hang"), 0.1)
 	_play("hang")
 	combat_event.emit("매달림  Space 올라서기 · 클릭 뛰어올라 베기", Color(0.95, 0.92, 0.75))
 
@@ -1979,7 +2123,7 @@ func _hang_update(delta: float) -> void:
 
 func _hang_exit() -> void:
 	if sm.state != "climb":
-		_pose_to(MoveSet.FP_POSES.rest, 0.15)
+		_pose_to(Weapons.fp_pose(weapon, "rest"), 0.15)
 
 
 func _drop_from_hang() -> void:
@@ -2027,7 +2171,7 @@ func _zip_enter(d: Dictionary) -> void:
 	_zip_t = d.t
 	_zip_stall = 0.0
 	_zip.rider_count += 1
-	_pose_to(MoveSet.FP_POSES.zip, 0.12)
+	_pose_to(Weapons.fp_pose(weapon, "zip"), 0.12)
 	_play("zip_attach")
 	Audio.loop_start("zip_player", "zip_loop", self)
 
@@ -2069,7 +2213,7 @@ func _zip_exit() -> void:
 	_play("zip_release")
 	if is_instance_valid(_zip):
 		_zip.rider_count -= 1
-	_pose_to(MoveSet.FP_POSES.rest, 0.15)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.15)
 
 
 # --- 밀려 떨어지기, 낭떠러지 ---
@@ -2228,7 +2372,9 @@ func _special_update(delta: float) -> void:
 				"whirl":
 					_special_sweep(float(_sp.reach), -1.0)
 					_roll = deg_to_rad(9.0)
-				"rush":
+				"flurry", "storm":
+					_special_multi()
+				"rush", "takedown":
 					velocity.x = fwd.x * float(_sp.rush_speed)
 					velocity.z = fwd.z * float(_sp.rush_speed)
 					if _special_sweep(float(_sp.reach), 0.35) > 0:
@@ -2286,12 +2432,19 @@ func _special_active(fwd: Vector3) -> void:
 			Fx.sparks(get_parent(), global_position + Vector3.UP, Vector3.UP, 18, Color(0.5, 0.35, 0.9))
 			_sp_hits = 1
 			_special_sweep(float(_sp.reach) + 0.6, 0.0)
-		"rush":
+		"rush", "takedown":
 			camera.fov += 8.0
+		"flurry":
+			velocity += fwd * float(_sp.lunge)
+			_sp_hits = 0
+			_special_multi()
+		"storm":
+			_sp_hits = 0
+			_special_multi()
 
 
 ## 필살기가 닿는 상대들. min_dot: 앞쪽 몇 도까지 (-1 = 사방, 0 = 앞쪽 반원). 맞힌 수를 돌려준다.
-func _special_sweep(radius: float, min_dot: float) -> int:
+func _special_sweep(radius: float, min_dot: float, extra := {}) -> int:
 	var sphere := SphereShape3D.new()
 	sphere.radius = radius
 	_sp_query.shape = sphere
@@ -2317,7 +2470,9 @@ func _special_sweep(radius: float, min_dot: float) -> int:
 		var info := {"move": "special", "react": _sp.react, "guard": _sp.guard, "dir": _sp.dir,
 				"damage": int(round(float(_sp.damage) * build.damage_mult() * vkit.damage_mult())) + randi_range(-1, 1),
 				"pressure": build.guard_pressure() * 2.0, "power": vkit.powered(),
-				"push": float(_sp.get("push", 0.0)), "lift": float(_sp.get("lift", 2.0))}
+				"push": float(_sp.get("push", 0.0)), "lift": float(_sp.get("lift", 2.0)),
+				"knockdown": bool(_sp.get("knockdown", false))}
+		info.merge(extra, true)
 		var result = body.take_hit(info, hit_dir, self)
 		if result in ["hit", "guard_broken", "wrong_guard"]:
 			count += 1
@@ -2328,6 +2483,37 @@ func _special_sweep(radius: float, min_dot: float) -> int:
 			pass   # 부딪히는 소리는 막은 쪽이 낸다
 			Fx.sparks(get_parent(), _blade_tip.global_position, -hit_dir)
 	return count
+
+
+## 폭풍 난타(봉) / 칼날 폭풍(수리검): 휘두르는 시간 동안 나눠서 여러 번 친다
+func _special_multi() -> void:
+	var count := int(_sp.get("strikes", _sp.get("count", 1)))
+	var gap := float(_sp.active) / float(count)
+	var elapsed := float(_sp.active) - _attack_timer
+	while _sp_hits < count and elapsed >= gap * _sp_hits - 0.001:
+		var i := _sp_hits
+		_sp_hits += 1
+		var last := i == count - 1
+		if _sp.effect == "storm":
+			var info := {"move": "special", "react": _sp.react, "guard": _sp.guard, "dir": _sp.dir,
+					"damage": int(round(float(_sp.damage) * build.damage_mult() * vkit.damage_mult())),
+					"pressure": build.guard_pressure() * 2.0, "power": vkit.powered(),
+					"push": float(_sp.get("push", 0.0)), "lift": float(_sp.get("lift", 2.0))}
+			_throw_shuriken(count, float(_sp.spread), float(_sp.speed), float(_sp.homing), info, (i * 3) % count)
+			_play("shuriken_throw", 1.0 + i * 0.03, -3.0)
+			_kick.x += deg_to_rad(-0.6)
+		else:
+			_already_hit.clear()
+			var extra := {}
+			if last:
+				extra = {"damage": int(round(float(_sp.last_damage) * build.damage_mult())), "guard": "break",
+						"react": "stagger", "knockdown": true, "push": 9.0, "lift": 3.0}
+			_kill_weapon_tween()
+			_weapon_tween = create_tween()
+			_tween_pose(_weapon_tween, _sp.fp.strike if i % 2 == 0 else _sp.fp.windup, gap * 0.9, Tween.TRANS_CUBIC, Tween.EASE_OUT)
+			_roll = deg_to_rad(5.0) * (1.0 if i % 2 == 0 else -1.0)
+			_play(_wsnd("swing_heavy" if last else "swing"), 1.0 + i * 0.04, -2.0)
+			_special_sweep(float(_sp.reach), 0.2, extra)
 
 
 ## 가장 가까운 상대 (range 안, 같은 높이쯤)
@@ -2395,7 +2581,7 @@ func _slide_enter(_d: Dictionary) -> void:
 	_slide_speed = maxf(hv.length(), SPRINT_SPEED * 0.9) * float(MoveSet.RUN.slide_boost)
 	_use_stamina(float(MoveSet.RUN.slide_cost))
 	_set_low(true)
-	_pose_to(MoveSet.FP_POSES.slide, 0.12)
+	_pose_to(Weapons.fp_pose(weapon, "slide"), 0.12)
 	_play("dash", 0.8, -4.0)
 	Fx.sparks(get_parent(), global_position + Vector3.UP * 0.1, Vector3.UP, 8, Color(0.85, 0.78, 0.65))
 
@@ -2428,7 +2614,7 @@ func _slide_update(delta: float) -> void:
 
 func _slide_exit() -> void:
 	if sm.state not in ["attack"]:
-		_pose_to(MoveSet.FP_POSES.rest, 0.15)
+		_pose_to(Weapons.fp_pose(weapon, "rest"), 0.15)
 
 
 func is_sliding() -> bool:
@@ -2533,7 +2719,7 @@ func _crate_in_reach() -> ArenaCrate:
 func pick_crate(c: ArenaCrate) -> void:
 	held_crate = c
 	c.pick_up(self)
-	_pose_to(MoveSet.FP_POSES.carry, 0.15)
+	_pose_to(Weapons.fp_pose(weapon, "carry"), 0.15)
 	_play("grab_whoosh", 0.8)
 
 
@@ -2547,7 +2733,7 @@ func throw_crate() -> void:
 	_kick.x += deg_to_rad(-3.0)
 	_use_stamina(8.0)
 	_play(_wsnd("swing_heavy"))
-	_pose_to(MoveSet.FP_POSES.rest, 0.2)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.2)
 	attack_started.emit("crate")
 
 
@@ -2557,7 +2743,7 @@ func drop_crate() -> void:
 	var c := held_crate
 	held_crate = null
 	c.throw_from(c.global_position, velocity * 0.5, null)
-	_pose_to(MoveSet.FP_POSES.rest, 0.2)
+	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.2)
 
 
 func _update_held_crate() -> void:

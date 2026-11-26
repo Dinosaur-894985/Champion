@@ -145,6 +145,7 @@ func _ready() -> void:
 	add_child(col)
 	rig = BodyRig.new()
 	rig.weapon = weapon
+	rig.build = build
 	add_child(rig)
 	for n in ["idle", "approach", "circle"]:
 		sm.add(n, Callable(), _neutral_update)
@@ -345,6 +346,12 @@ func _think() -> void:
 		_combo_left = 0
 		_start_attack("thrust")
 		return
+	# 수리검: 멀리 있으면 던진다 (끝없이 나온다). 가끔 세 장 부채꼴
+	if Weapons.get_weapon(weapon).ai.has("throw") and _dist > 3.2 and _dist < 16.0 \
+			and absf(_dy) < 2.5 and randf() < 0.55 * _style("throw") and _clear_line_to_target():
+		_combo_left = 0
+		_start_attack("heavy" if randf() < 0.75 else "charge")
+		return
 	if _think_movement():
 		return
 	var r := randf()
@@ -510,6 +517,7 @@ func _back_to_neutral() -> void:
 	rig.glow(rig.blade_mat.emission, 0.0)
 	rig.tremble = 0.0
 	rig.reach = 0.0
+	rig.leg_kick = 0.0
 	# 경직이 풀렸는데 상대가 이미 휘두르고 있으면: 바로 방향을 읽고 막는다 (연타에 갇히지 않게)
 	if active and target and target.attack_threat() and _dist < 3.2 \
 			and randf() < block_chance + (0.3 if _alert > 0.0 else 0.1):
@@ -600,7 +608,8 @@ func _windup_enter(_d: Dictionary) -> void:
 	spend_stamina(float(data.cost))
 	# 자꾸 피하면 일부러 한 박자 늦게 휘두르기도 한다
 	_windup_len = data.ai_windup * _atk_mult() + randf() * 0.12 * mini(_dodged_by_target, 3)
-	rig.set_pose(data.body.windup, 2.5 / (data.ai_windup * _atk_mult()))
+	rig.set_pose(data.body.windup, 2.5 / (data.ai_windup * _atk_mult()), str(data.get("hand", "")))
+	_kick_pose(data, 0.5)
 	var col := Color(1.0, 0.55, 0.1)
 	if data.warn == "heavy":
 		col = Color(1.0, 0.15, 0.1)
@@ -683,7 +692,8 @@ func _try_feint() -> bool:
 		var data: Dictionary = _mv(_attack)
 		_windup_len = maxf(data.ai_windup * _atk_mult() * 0.75, 0.32)
 		sm.time = 0.0
-		rig.set_pose(data.body.windup, 3.0 / _windup_len)
+		rig.set_pose(data.body.windup, 3.0 / _windup_len, str(data.get("hand", "")))
+		_kick_pose(data, 0.5)
 		_play("feint")
 		_play("warn_light", -2.0)
 		return true
@@ -702,16 +712,26 @@ func _strike_enter(_d: Dictionary) -> void:
 	var data: Dictionary = _mv(_attack)
 	if float(data.get("hop", 0.0)) > 0.0 and is_on_floor():
 		velocity.y = float(data.hop) * 0.8
+	_strike_i = 0
+	_strike_extra = {}
 	if _attack == "special":
 		_special_strike(data)
-	rig.set_pose(data.body.strike, 30.0)
+	rig.set_pose(data.body.strike, 30.0, str(data.get("hand", "")))
+	_kick_pose(data, 1.0)
 	rig.tremble = 0.0
 	if _attack == "special":
 		_play("sp_" + str(data.effect))
 	elif _attack == "grab":
 		_play("grab_whoosh")
+	elif data.has("projectile"):
+		_play("shuriken_throw")
 	else:
 		_play(_wsnd("swing_heavy" if _attack in ["heavy", "charge", "slash3", "spin", "cleave", "pierce"] else "swing"))
+	if data.has("projectile"):
+		# 수리검 던지기: 휘두르지 않고 날려 보낸다
+		_hit_done = true
+		var pr: Dictionary = data.projectile
+		_throw_projectiles(data, int(pr.count), float(pr.spread), float(pr.speed), float(pr.get("homing", 0.0)))
 
 
 func _strike_update(_delta: float) -> void:
@@ -720,9 +740,11 @@ func _strike_update(_delta: float) -> void:
 	_move = -global_transform.basis.z * float(data.lunge) if _dist > 1.3 else Vector3.ZERO
 	if _attack in ["run_thrust", "sweep"] and _dist > 1.3:
 		_move = -global_transform.basis.z * (RUN_SPEED if _attack == "run_thrust" else SLIDE_SPEED) * 0.7
-	if _attack == "special" and data.effect == "rush" and not _hit_done:
+	if _attack == "special" and data.effect in ["rush", "takedown"] and not _hit_done:
 		_move = -global_transform.basis.z * float(data.rush_speed)
 		_turn_speed = 1.5
+	if _attack == "special" and data.effect in ["flurry", "storm"]:
+		_special_multi(data)
 	if not _hit_done:
 		if _attack == "grab":
 			_try_grab(data)
@@ -738,6 +760,7 @@ func _strike_update(_delta: float) -> void:
 
 func _recover_enter(_d: Dictionary) -> void:
 	rig.low = 0.0
+	rig.leg_kick = 0.0
 
 
 func _recover_update(delta: float) -> void:
@@ -814,6 +837,7 @@ func _stagger_enter(d: Dictionary) -> void:
 	_combo_left = 0
 	_grab_wait = 0.0
 	rig.reach = 0.0
+	rig.leg_kick = 0.0
 	rig.tremble = 0.0
 	rig.glow(rig.blade_mat.emission, 0.0)
 	if d.get("big", true):
@@ -969,6 +993,7 @@ func _try_hit(data: Dictionary) -> void:
 		"push_add": data.get("push_add", 0.0), "push": data.get("push", 0.0), "lift": data.get("lift", 2.0),
 		"dir": data.get("dir", ""), "knockdown": data.get("knockdown", false),
 	}
+	info.merge(_strike_extra, true)
 	var result := target.receive_attack(info, self)
 	if result in ["hit", "guard_broken", "wrong_guard"] and _attack != "special":
 		add_gauge(info.damage * Weapons.GAUGE.dealt)
@@ -976,7 +1001,8 @@ func _try_hit(data: Dictionary) -> void:
 	stats["res_" + result] = stats.get("res_" + result, 0) + 1
 	match result:
 		"parried":
-			_stagger(0.75)
+			# 맨몸 격투(호신술)에 튕겨나면 더 오래 굳는다
+			_stagger(0.75 * Weapons.stat_or(target.weapon, "parry_stun", 1.0))
 			combat_event.emit("반격 기회!", Color(0.55, 0.85, 1.0))
 		"blocked":
 			_push = -_dir * 3.0
@@ -1147,11 +1173,13 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 		var parry := parry_chance * (1.0 + 0.12 * (float(build.stats.tec) - 5.0)) * Weapons.stat(weapon, "parry")
 		if _state_t < 0.3 and randf() < parry:
 			_play("parry")
+			add_gauge(Weapons.GAUGE.parry)
+			if info.get("projectile", false):
+				return "parried"   # 날아온 수리검: 쳐내기만 한다
 			# 튕겨낸 뒤 바로 반격
 			_combo_left = 0
 			_start_attack("slash1")
 			sm.time = _mv("slash1").ai_windup * 0.45
-			add_gauge(Weapons.GAUGE.parry)
 			return "parried"
 		if info.guard == "break":
 			# 막기를 깨는 공격
@@ -1172,7 +1200,7 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 			if not dead:
 				_stagger(MoveSet.REACTIONS.guard_break.time)
 			return "hit"
-		if randf() < counter_chance:
+		if randf() < counter_chance and not info.get("projectile", false):
 			# 막아낸 뒤 상대가 튕겨난 틈에 바로 반격
 			_combo_left = 0
 			_start_attack("slash1")
@@ -1984,6 +2012,12 @@ func _try_special() -> bool:
 			ok = _dist > 1.8 and _dist < float(sp.jump)
 		"rush":
 			ok = _dist > 2.5 and _dist < float(sp.rush_speed) * float(sp.active) + 1.5
+		"takedown":
+			ok = _dist > 1.4 and _dist < float(sp.rush_speed) * float(sp.active) + 1.0
+		"flurry":
+			ok = _dist < float(sp.reach) - 0.3
+		"storm":
+			ok = _dist > 2.0 and _dist < float(sp.reach) and _clear_line_to_target()
 	if not ok or absf(_dy) > 1.2:
 		return false
 	gauge = 0.0
@@ -1996,6 +2030,10 @@ func _try_special() -> bool:
 
 func _special_strike(data: Dictionary) -> void:
 	match str(data.effect):
+		"storm":
+			_hit_done = true
+		"takedown":
+			rig.reach = 1.0
 		"shadow":
 			# 상대 등 뒤로 순간이동
 			Fx.sparks(get_parent(), global_position + Vector3.UP, Vector3.UP, 18, Color(0.5, 0.35, 0.9))
@@ -2163,6 +2201,11 @@ func on_incoming_object(obj: Node3D) -> void:
 	if not (_can_react() or state == "block"):
 		return
 	var r := randf()
+	if obj is Projectile:
+		# 수리검: 찌르기 막기(가운데)로 막거나 옆으로 피한다. 가끔은 못 본다
+		if r < 0.2:
+			return
+		guard_dir = _read_dir(AttackDir.MID)
 	if r < block_chance + 0.15:
 		_face = Vector3.ZERO
 		_enter_block()
@@ -2207,3 +2250,78 @@ func _shove_crates() -> void:
 			cr.kick(away * (hv.length() * 1.4 + 2.0) + Vector3.UP * 2.5, self)
 		else:
 			cr.nudge(away * maxf(hv.length(), 2.0) * 1.5 + hv * 0.5)
+
+
+# ---------------- 새 무기: 발차기 자세, 수리검 던지기, 여러 번 치는 필살기 ----------------
+
+var _strike_i := 0          # 여러 번 치는 필살기: 지금까지 낸 수
+var _strike_extra := {}     # 이번 한 방에만 덧붙는 판정 (마지막 한 방 등)
+
+
+## 맨몸 발차기면 다리를 든다 (amt 0.5 = 무릎 접기, 1 = 뻗기)
+func _kick_pose(data: Dictionary, amt: float) -> void:
+	var limb := str(data.get("limb", ""))
+	if limb.begins_with("kick"):
+		rig.kick_style = limb
+		rig.leg_kick = amt
+	else:
+		rig.leg_kick = 0.0
+
+
+## 수리검을 던진다. 상대가 움직이는 쪽을 조금 앞서 노린다 (다 앞서지는 않아서 옆으로 피할 수 있다)
+func _throw_projectiles(data: Dictionary, count: int, spread_deg: float, speed: float, homing: float, only := -1) -> void:
+	if target == null:
+		return
+	var fwd := -global_transform.basis.z
+	var from := global_position + Vector3.UP * 1.45 + fwd * 0.45 + global_transform.basis.x * 0.18
+	var aim := target.global_position + Vector3.UP * 1.15
+	var tt := from.distance_to(aim) / maxf(speed, 1.0)
+	aim += Vector3(target.velocity.x, 0, target.velocity.z) * tt * 0.55
+	var base_dir := (aim - from).normalized()
+	var dmg := float(data.damage)
+	var info := {"move": _attack, "damage": 0, "react": data.react, "guard": data.get("ai_guard", data.guard),
+			"pressure": build.guard_pressure() * Weapons.stat(weapon, "pressure"), "dir": data.get("dir", AttackDir.MID),
+			"push": float(data.get("push", 0.0)), "lift": float(data.get("lift", 2.0)), "power": vkit.powered()}
+	for i in count:
+		if only >= 0 and i != only:
+			continue
+		var a := 0.0
+		if count > 1:
+			a = lerpf(-spread_deg * 0.5, spread_deg * 0.5, float(i) / float(count - 1))
+		var dir := base_dir.rotated(Vector3.UP, deg_to_rad(a))
+		info.damage = int(round(dmg * build.damage_mult() * vkit.damage_mult())) + randi_range(-1, 1)
+		Projectile.launch(get_parent(), from, dir, speed, info, self, target, homing)
+
+
+## 수리검이 어디에 닿았는지 (Projectile 이 알려 준다)
+func on_projectile_result(result: String, info: Dictionary, _body: Node3D) -> void:
+	stats["res_" + result] = stats.get("res_" + result, 0) + 1
+	if result in ["hit", "guard_broken", "wrong_guard"]:
+		if info.get("move", "") != "special":
+			add_gauge(float(info.damage) * Weapons.GAUGE.dealt)
+	if result in ["hit", "guard_broken", "wrong_guard", "blocked", "parried", "dodged"]:
+		mind.my_attack_result(str(info.get("dir", "")), result)
+
+
+## 폭풍 난타(봉) / 칼날 폭풍(수리검): 휘두르는 시간 동안 나눠서 여러 번 친다
+func _special_multi(data: Dictionary) -> void:
+	var count := int(data.get("strikes", data.get("count", 1)))
+	var gap := float(data.active) / float(count)
+	while _strike_i < count and _state_t >= gap * _strike_i:
+		var i := _strike_i
+		_strike_i += 1
+		var last := i == count - 1
+		if data.effect == "storm":
+			# 부채꼴 안에서 왼쪽 오른쪽을 오가며 한 장씩
+			var order := (i * 3) % count
+			_throw_projectiles(data, count, float(data.spread), float(data.speed), float(data.get("homing", 0.0)), order)
+			_play("shuriken_throw", -3.0)
+		else:
+			_hit_done = false
+			_strike_extra = {}
+			if last:
+				_strike_extra = {"damage": int(round(float(data.last_damage) * build.damage_mult())), "guard": "break",
+						"react": "stagger", "knockdown": true, "push": 9.0, "lift": 3.0}
+			rig.set_pose(data.body.strike if i % 2 == 0 else data.body.windup, 45.0)
+			_play(_wsnd("swing_heavy" if last else "swing"), -2.0)
+
