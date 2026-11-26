@@ -170,6 +170,9 @@ func _ready() -> void:
 		add_child(c)
 		c.setup(CRATES[i] + Vector3.UP * (ArenaCrate.SIZE * 0.5 + 0.02), _mats)
 		crates.append(c)
+	# 고리마다 움직이지 않는 장식을 재질별로 합친다 (웹 버전이 그릴 물체 수를 줄인다)
+	for r in _rings:
+		LowPoly.merge_children(r, false, _ring_warn.values())
 	director = ArenaDirector.new()
 	director.arena = self
 	add_child(director)
