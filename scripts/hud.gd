@@ -186,7 +186,7 @@ func _ready() -> void:
 
 	# 조작법 (왼쪽 위)
 	_help = Label.new()
-	_help.text = "W A S D  이동\nShift + 방향키  그쪽으로 대시 (누르고 있으면 달리기)\nSpace  점프\n벽을 보고 W + Space  벽 타고 오르기 (위에서 W 누른 채 올라섬)\n벽 옆을 달리다 Space  벽 달리기 (달리는 중 Space: 벽 차고 뛰기)\n왼쪽 클릭 연타  연속 베기 (세 번째가 강함)\n마우스를 살짝 위로/아래로 움직이며 클릭  내려베기 / 찌르기\n왼쪽 클릭 길게  차지 베기 (끝까지 모으면 막기를 깨뜨림)\nQ  내려찍기 (느리지만 강함, 막기를 깨뜨림)\nE / R  특수 스킬 (오른쪽 아래 칸)\n오른쪽 클릭  막기 — 막는 중 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\nV  무기 필살기 (아래 금색 게이지가 다 차면)\nF  잡아 던지기 (막는 상대에게. 휘두르는 상대에겐 끊긴다)\n휘두르기 전에 오른쪽 클릭/F/Shift  속임수 (공격 멈추기)\n공격을 대시로 아슬하게 피하면  바로 클릭해서 반격\nEsc  메뉴"
+	_help.text = "W A S D  이동    Space  점프\nShift  달리기 (누르는 순간부터 빨라짐)\nShift + 옆/뒤  그쪽으로 피하기\nC  앉기 — 달리다 누르면 슬라이딩 (슬라이딩 중 Space: 점프)\n벽을 보고 W + Space  벽 타고 오르기 / 벽 옆을 달리다 Space  벽 달리기\n왼쪽 클릭 연타  연속기 — 이어 누를 때 마우스를 위/아래로 움직이면 갈래가 바뀜\n    옆 네 번: 회전 베기 / 위로 이어: 쪼개기 / 아래로 이어: 꿰뚫기\n달리며 클릭  달려 찌르기 / 슬라이딩 중 클릭  다리 베기(넘어뜨림)\n벽을 달리다(벽 차고 뛴 직후) 클릭  벽 차고 베기\n왼쪽 클릭 길게  차지 베기    Q  내려찍기 (막기를 깨뜨림)\n오른쪽 클릭  막기 — 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\nF  잡아 던지기 / 상자 옆에서 F  상자 들기 → F나 클릭으로 던지기\n상자를 베거나 달려서 차면 날아감 · 금 간 돌기둥을 쳐서 상대 쪽으로 쓰러뜨리기\n휘두르기 전 오른쪽 클릭/F/Shift  속임수 · 아슬하게 피한 직후 클릭  반격\nE / R  특수 스킬    V  무기 필살기    Esc  메뉴"
 	_help.add_theme_font_size_override("font_size", 15)
 	_help.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
 	_help.add_theme_constant_override("outline_size", 5)   # 밝은 경기장에서도 읽히게
@@ -370,7 +370,7 @@ func show_menu(kind: String) -> void:
 			_add_button("연습장으로", "practice")
 		"lose":
 			_menu_title.text = "패배"
-			_menu_sub.text = "빛나는 칼을 보면 막거나(오른쪽 클릭) 옆으로 대시(Shift)하세요"
+			_menu_sub.text = "빛나는 칼을 보면 막거나(오른쪽 클릭) 옆으로 피하세요(Shift + A 또는 D)"
 			_add_button("다시 대결", "retry", true)
 			_add_button("다른 상대 고르기", "opponent")
 			_add_button("캐릭터 만들기", "build")

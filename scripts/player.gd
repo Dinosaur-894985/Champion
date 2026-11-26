@@ -122,6 +122,20 @@ var _press_owner := ""         # 그 클릭으로 시작한 동작
 var _charge_level := 0.0
 var _charge_full := false
 var _hit_info := {}
+var _combo_step := 0           # 연속기 몇 번째 타인가
+var _buffer_dir := "none"      # 예약된 공격 다음에 한 번 더 누른 클릭의 방향 ("none" = 없음)
+
+# 달리기 / 앉기 / 슬라이딩
+var _crouching := false
+var _slide_dir := Vector3.ZERO
+var _slide_speed := 0.0
+var _carry_t := 0.0            # 슬라이딩/점프 뒤 남은 빠르기를 천천히 잃는 시간
+var _since_walljump := 99.0    # 벽을 차고 뛴 뒤 지난 시간 (벽 차고 베기)
+var _cap: CapsuleShape3D
+var _col: CollisionShape3D
+var _head_y := 1.62
+# 들고 있는 상자
+var held_crate: ArenaCrate = null
 
 # 벽 동작
 var _wall_contact := false     # 지난 프레임에 벽에 닿았나
@@ -193,6 +207,8 @@ func _ready() -> void:
 	col.shape = cap
 	col.position.y = 0.9
 	add_child(col)
+	_cap = cap
+	_col = col
 
 	head = Node3D.new()
 	head.position.y = 1.62
@@ -225,7 +241,8 @@ func _ready() -> void:
 		.add("special", _special_enter, _special_update, _special_exit) \
 		.add("plunge", _plunge_enter, _plunge_update, _plunge_exit) \
 		.add("hang", _hang_enter, _hang_update, _hang_exit) \
-		.add("zip", _zip_enter, _zip_update, _zip_exit)
+		.add("zip", _zip_enter, _zip_update, _zip_exit) \
+		.add("slide", _slide_enter, _slide_update, _slide_exit)
 	sm.go("free")
 	_ray.exclude = [get_rid()]
 	_ray.collision_mask = 1
@@ -323,9 +340,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("heavy_attack"):
 		_request_attack("heavy")
 	elif event.is_action_pressed("sprint"):
-		try_dash()
+		sprint_pressed()
+	elif event.is_action_pressed("crouch"):
+		crouch_pressed()
 	elif event.is_action_pressed("grab"):
-		try_grab()
+		if held_crate != null:
+			throw_crate()
+		else:
+			try_grab()
 	elif event.is_action_pressed("block"):
 		block_pressed(_flick.dir())
 	elif event.is_action_pressed("skill1"):
@@ -349,6 +371,8 @@ func _physics_process(delta: float) -> void:
 	skills.tick(delta)
 	_dash_cd = maxf(_dash_cd - delta, 0.0)
 	_since_dash += delta
+	_since_walljump += delta
+	_carry_t = maxf(_carry_t - delta, 0.0)
 	if _press_t >= 0.0:
 		_press_t += delta
 	if _counter_t > 0.0:
@@ -370,7 +394,7 @@ func _physics_process(delta: float) -> void:
 	# 이중 점프는 점프 키를 한 번 뗐다가 다시 눌러야 나간다 (같은 누름으로 두 번 뛰지 않게)
 	if not Input.is_action_pressed("jump"):
 		_jump_released = true
-	if _can_act() and not sm.is_in(["dash", "climb", "wallrun", "grapple", "plunge", "hang", "zip"]) and Input.is_action_just_pressed("jump"):
+	if _can_act() and not sm.is_in(["dash", "climb", "wallrun", "grapple", "plunge", "hang", "zip", "slide"]) and Input.is_action_just_pressed("jump"):
 		_jump_buffer = JUMP_BUFFER
 		# 이중 점프: 공중에서 한 번 더
 		if _coyote <= 0.0 and _jump_released and skills.try_double_jump(JUMP_VELOCITY * 0.95):
@@ -389,16 +413,29 @@ func _physics_process(delta: float) -> void:
 	if controls_enabled and not dead:
 		input = Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	var dir := (transform.basis * Vector3(input.x, 0, input.y)).normalized()
+	# 달리기: Shift 를 누르고 있으면 앞쪽(비스듬히 앞 포함)으로 빨라진다. 순간 돌진은 없다.
+	_update_crouch(delta, on_floor)
 	_sprinting = _can_act() and sm.state == "free" and Input.is_action_pressed("sprint") \
-			and input.y < 0.0 and stamina > 0.0
+			and input.y < -0.3 and stamina > 0.0 and not _crouching
 	var speed := (SPRINT_SPEED if _sprinting else WALK_SPEED) * _move_mult() * build.speed_mult() * skills.speed_mult() \
 			* Weapons.stat(weapon, "speed")
+	if _crouching:
+		speed *= float(MoveSet.RUN.crouch_mult)
 
-	if not sm.is_in(["dash", "climb", "wallrun", "grapple", "plunge", "hang", "zip"]):
+	if not sm.is_in(["dash", "climb", "wallrun", "grapple", "plunge", "hang", "zip", "slide"]):
 		var accel := GROUND_ACCEL if on_floor else AIR_ACCEL
+		var target := dir * speed
+		var hv := Vector2(velocity.x, velocity.z)
+		if _sprinting and on_floor and hv.length() < speed:
+			accel = float(MoveSet.RUN.sprint_accel)   # 누른 순간부터 빠르게 붙는 달리기
+		elif on_floor and _carry_t > 0.0 and hv.length() > speed and dir.dot(Vector3(hv.x, 0, hv.y).normalized()) > 0.3:
+			accel = float(MoveSet.RUN.carry_accel)    # 슬라이딩/점프의 빠르기를 바로 잃지 않는다
+		if sm.state == "attack" and bool(_mv(_move).get("keep_speed", false)):
+			accel = 1.2 if on_floor else 0.6         # 달리며 쓰는 기술: 달리던 힘을 그대로 싣는다
+		elif sm.state == "attack" and on_floor:
+			accel = 7.0                               # 휘두르면서도 조금은 미끄러지며 움직인다
 		if _thrown_t > 0.0:
 			accel = 1.5   # 던져지는 중에는 거의 멈추지 못하고 날아간다
-		var target := dir * speed
 		velocity.x = lerpf(velocity.x, target.x, clampf(accel * delta, 0, 1))
 		velocity.z = lerpf(velocity.z, target.z, clampf(accel * delta, 0, 1))
 	_fall_speed = velocity.y
@@ -431,6 +468,7 @@ func _physics_process(delta: float) -> void:
 	trail_mat.albedo_color.a = move_toward(trail_mat.albedo_color.a, 0.35 if _attack_phase == "active" else 0.0, delta * 4.0 if _attack_phase != "active" else 99.0)
 	_update_camera(delta, on_floor, _sprinting)
 	_update_rope()
+	_update_held_crate()
 
 
 # ---------------- 벽 동작 ----------------
@@ -441,6 +479,9 @@ func _after_move(was_on_floor: bool, input: Vector2) -> void:
 	for i in get_slide_collision_count():
 		var c := get_slide_collision(i)
 		var n := c.get_normal()
+		if c.get_collider() is ArenaCrate:
+			_bump_crate(c.get_collider() as ArenaCrate)
+			continue
 		if absf(n.y) > 0.35:
 			continue
 		n.y = 0
@@ -459,6 +500,12 @@ func _after_move(was_on_floor: bool, input: Vector2) -> void:
 		_climb_used = false
 		_last_run_n = Vector3.ZERO
 		skills.landed()
+		if not was_on_floor:
+			# 빠르게 착지하면 빠르기가 잠깐 남는다. C 를 누르고 있으면 그대로 슬라이딩
+			if _pre_speed > WALK_SPEED + 0.5:
+				_carry_t = 0.35
+			if sm.state == "free" and _can_act() and Input.is_action_pressed("crouch"):
+				try_slide()
 		return
 	if _try_hang_or_zip(input):
 		return
@@ -562,6 +609,7 @@ func _climb_update(delta: float) -> void:
 		# 벽 차고 뒤로 뛰기
 		velocity = _wall_n * float(t.kick_out) + Vector3.UP * float(t.kick_up)
 		_play("wall_kick")
+		_since_walljump = 0.0
 		sm.go("free")
 		return
 	var holding := _can_act() and Input.is_action_pressed("move_forward")
@@ -600,6 +648,8 @@ func _wallrun_update(delta: float) -> void:
 		# 벽 차고 뛰기: 다른 벽으로 이어 달릴 수 있다
 		velocity = _run_n * float(t.jump_out) + _run_t * spd * 0.75 + Vector3.UP * float(t.jump_up)
 		_play("wall_kick")
+		_since_walljump = 0.0
+		_carry_t = 0.6
 		sm.go("free")
 		return
 	var holding := _can_act() and Input.is_action_pressed("move_forward")
@@ -629,7 +679,7 @@ func _move_mult() -> float:
 			return 0.55
 		"stagger":
 			return 0.35 if _stun_kind != "flinch" else 0.6
-	return 1.0
+	return 1.0 if held_crate == null else 0.8
 
 
 func _can_act() -> bool:
@@ -761,12 +811,29 @@ func _block_update(_delta: float) -> void:
 		_pose_to(MoveSet.FP_POSES.rest, 0.14)
 
 
+# ---------------- 달리기 / 피하기 ----------------
+
+## Shift 를 눌렀을 때: 앞(또는 비스듬히 앞)이면 달리기만 (순간 돌진 없음, 누르고 있는 동안 빨라진다).
+## 옆이나 뒤를 누르고 있거나 방향키가 없으면 그쪽으로 짧게 피한다 (대시).
+## 공격을 준비하는 중이면 속임수 (공격 멈추기).
+func sprint_pressed() -> void:
+	if dead or not controls_enabled:
+		return
+	var input := Input.get_vector("move_left", "move_right", "move_forward", "move_back")
+	if input.y < -0.3:
+		if (sm.state == "attack" and _attack_phase == "windup") or sm.state == "charge":
+			if _try_feint():
+				sm.go("free")
+		return
+	try_dash()
+
+
 # ---------------- 방향 대시 ----------------
 
 func try_dash() -> void:
 	if dead or not controls_enabled or _dash_cd > 0.0:
 		return
-	if not sm.is_in(["free", "block", "attack", "charge"]):
+	if not sm.is_in(["free", "block", "attack", "charge", "slide"]):
 		return
 	# 공격은 준비 중(속임수)이거나 회복 동작 중일 때만 대시로 끊을 수 있다. 휘두르는 순간은 안 된다.
 	if sm.state == "attack" and _attack_phase == "active":
@@ -858,19 +925,16 @@ var _aim_side := 0.0
 
 
 ## 클릭 방향에 맞는 동작. prev: 지금 쓰고 있는 동작 (연속 베기를 이어간다)
+## 연속기: 이어서 클릭할 때 마우스를 위/옆/아래로 움직이면 갈래가 바뀐다 (MoveSet.combo_next)
+##   옆 → 옆 → 옆 → 옆 : 베기, 되베기, 휩쓸기, 회전 베기
+##   두세 번째에 위 : 올려베기 → 쪼개기 (막기를 깨뜨림)
+##   두세 번째에 아래 : 두 번 찌르기 → 꿰뚫기 (멀리 밀어냄)
 func _combo_move(prev: String) -> String:
-	match _aim_dir:
-		AttackDir.HIGH:
-			return "overhead"
-		AttackDir.MID:
-			return "thrust"
 	if prev != "":
-		var nxt: String = _mv(prev).next
+		var nxt := MoveSet.combo_next(_mv(prev), _aim_dir)
 		if nxt != "":
 			return nxt
-	if _aim_side > 0.0:
-		return "slash2"
-	return "slash1"
+	return MoveSet.combo_start(_aim_dir, _aim_side)
 
 
 func attack_released() -> void:
@@ -883,11 +947,24 @@ func attack_released() -> void:
 func _request_attack(kind: String) -> void:
 	if dead or not controls_enabled:
 		return
+	if held_crate != null:
+		throw_crate()
+		return
 	if _vertical_attack(kind):
 		return
+	var light := kind in ["combo", "light"]
 	match sm.state:
+		"slide":
+			# 슬라이딩 중 클릭: 낮게 휩쓸어 다리 베기
+			if light:
+				_start_attack("sweep")
 		"free", "block":
-			_start_attack(_combo_move("") if kind in ["combo", "light"] else kind)
+			var hspeed := Vector2(velocity.x, velocity.z).length()
+			if light and sm.state == "free" and is_on_floor() and hspeed >= float(MoveSet.RUN.run_attack_speed) \
+					and (Input.is_action_pressed("sprint") or _carry_t > 0.0):
+				_start_attack("run_thrust")   # 달리던 힘을 실어 찌르기
+				return
+			_start_attack(_combo_move("") if light else kind)
 		"dash":
 			var q := _combo_move("") if kind in ["combo", "light"] else kind
 			if sm.time >= DASH_TIME * DASH_ATTACK_CANCEL:
@@ -895,9 +972,14 @@ func _request_attack(kind: String) -> void:
 			else:
 				_queued = q
 		"attack":
-			if _move == "charge" or (_attack_phase == "windup" and _queued != ""):
+			if _move == "charge":
 				return
-			if kind in ["combo", "light"]:
+			if _queued != "":
+				# 이미 다음 공격이 예약돼 있으면 그다음 것으로 한 번 더 기억해 둔다 (빠른 연타)
+				if light and _buffer_dir == "none":
+					_buffer_dir = _aim_dir
+				return
+			if light:
 				_queued = _combo_move(_move)
 			else:
 				_queued = kind
@@ -907,10 +989,11 @@ func _start_attack(move_name: String) -> void:
 	var data: Dictionary = _mv(move_name)
 	if stamina < data.cost * 0.5:
 		return
-	if move_name in ["slash1", "slash2", "slash3"] and _press_t >= 0.0:
+	if move_name in ["slash1", "slash2", "slash3", "spin"] and _press_t >= 0.0:
 		_press_owner = move_name
 	else:
 		_press_owner = ""
+	_combo_step = _combo_step + 1 if sm.state == "attack" else 1
 	sm.go("attack", {"move": move_name})
 
 
@@ -923,6 +1006,10 @@ func _attack_enter(d: Dictionary) -> void:
 	_attack_phase = "windup"
 	_attack_timer = data.windup * _atk_mult()
 	_queued = ""
+	if _buffer_dir != "none":
+		_aim_dir = _buffer_dir
+		_buffer_dir = "none"
+		_queued = _combo_move(_move)
 	_already_hit.clear()
 	_hit_info = {"move": _move, "react": data.react, "guard": data.guard, "damage": data.damage,
 			"pressure": build.guard_pressure() * Weapons.stat(weapon, "pressure"), "dir": data.get("dir", ""),
@@ -931,10 +1018,14 @@ func _attack_enter(d: Dictionary) -> void:
 		_hit_info.damage = Weapons.charge_damage(weapon, _charge_level)
 		if not _charge_full:
 			_hit_info.guard = "normal"
+	if data.get("knockdown", false):
+		_hit_info.knockdown = true
+	if float(data.get("hop", 0.0)) > 0.0 and is_on_floor():
+		velocity.y = float(data.hop)   # 쪼개기: 살짝 뛰어올라 내리찍는다
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
 	_tween_pose(_weapon_tween, data.fp.windup, data.windup * _atk_mult(),
-			Tween.TRANS_BACK if _move == "heavy" else Tween.TRANS_SINE)
+			Tween.TRANS_BACK if _move in ["heavy", "cleave", "spin"] else Tween.TRANS_SINE)
 	attack_started.emit(_move)
 
 
@@ -974,6 +1065,7 @@ func _attack_update(delta: float) -> void:
 				if sm.state == "attack" and _move == nxt:
 					return
 			if _attack_timer <= 0.0:
+				_buffer_dir = "none"
 				sm.go("free")
 
 
@@ -993,10 +1085,35 @@ func _enter_active(data: Dictionary) -> void:
 	velocity += fwd * float(data.lunge)
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
-	var ease_type := Tween.EASE_IN if _move == "heavy" else Tween.EASE_OUT
-	_tween_pose(_weapon_tween, data.fp.strike, data.active, Tween.TRANS_CUBIC, ease_type)
-	if _move in ["slash3", "charge", "counter"]:
-		_roll = deg_to_rad(5.0) * signf(data.fp.strike[0].y)
+	var ease_type := Tween.EASE_IN if _move in ["heavy", "cleave"] else Tween.EASE_OUT
+	if data.fp.has("mid"):
+		# 칼이 곧게 가지 않고 몸 앞을 크게 돌아 지나간다 (곡선)
+		_tween_pose(_weapon_tween, data.fp.mid, data.active * 0.42, Tween.TRANS_SINE, Tween.EASE_IN)
+		_tween_pose(_weapon_tween, data.fp.strike, data.active * 0.58, Tween.TRANS_CUBIC, Tween.EASE_OUT)
+	else:
+		_tween_pose(_weapon_tween, data.fp.strike, data.active, Tween.TRANS_CUBIC, ease_type)
+	_swing_feel(data)
+	if data.has("finisher") and _combo_step >= 3:
+		combat_event.emit("%d연속 · %s!" % [_combo_step, data.finisher], Color(1.0, 0.85, 0.45))
+
+
+## 휘두를 때 화면도 같이 움직인다: 옆 베기는 기울고, 내려베기는 숙이고, 찌르기는 앞으로 당겨진다
+func _swing_feel(data: Dictionary) -> void:
+	var big := str(data.get("warn", "")) == "heavy" or data.has("finisher")
+	match str(data.get("dir", "")):
+		AttackDir.SIDE:
+			var side := signf(float(data.fp.strike[0].y))
+			_roll = deg_to_rad(6.5 if big else 3.5) * side
+			_kick.y += deg_to_rad(-1.6 if big else -0.8) * side
+		AttackDir.HIGH:
+			_kick.x += deg_to_rad(-4.0 if big else -2.2)
+		AttackDir.MID:
+			_kick.x += deg_to_rad(-0.8)
+			camera.fov -= 5.0 if big else 3.0
+	if _move == "sweep":
+		_roll = deg_to_rad(-8.0)
+	elif _move == "spin":
+		_roll = deg_to_rad(10.0) * signf(float(data.fp.strike[0].y))
 
 
 func _tween_back(time: float) -> void:
@@ -1019,6 +1136,11 @@ func try_grab() -> void:
 		_try_feint()   # 휘두르는 척하다 잡기
 	elif not sm.is_in(["free", "block"]):
 		return
+	if not winding:
+		var cr := _crate_in_reach()
+		if cr != null:
+			pick_crate(cr)
+			return
 	if stamina < float(_mv("grab").cost) * 0.5:
 		return
 	_press_owner = ""
@@ -1228,6 +1350,7 @@ func _stagger_enter(d: Dictionary) -> void:
 		var side := signf(local.x) if absf(local.x) > 0.1 else 1.0
 		_kick = Vector3(deg_to_rad(5.0), 0, deg_to_rad(-6.0) * side) * float(r.kick)
 	_queued = ""
+	_buffer_dir = "none"
 	if _stun_kind == "flinch":
 		_pose_to(MoveSet.FP_POSES.rest, 0.15)
 	else:
@@ -1370,6 +1493,10 @@ func _check_hits(data: Dictionary) -> void:
 	# 판정 상자 길이 = 닿는 거리 (무기마다 다르다)
 	_hit_box.size = Vector3(1.9, 1.3, float(data.reach) + 0.1)
 	var center: Vector3 = camera.global_position + fwd * float(data.reach) * 0.5
+	if not is_on_floor() or _move == "sweep":
+		# 공중에서 휘두르면 아래쪽까지, 다리 베기는 낮은 곳까지 닿는다
+		_hit_box.size.y = 2.4
+		center += Vector3.DOWN * (0.7 if _move != "sweep" else 0.2)
 	_hit_query.transform = Transform3D(camera.global_transform.basis, center)
 	var results := get_world_3d().direct_space_state.intersect_shape(_hit_query, 8)
 	for r in results:
@@ -1403,6 +1530,8 @@ func _check_hits(data: Dictionary) -> void:
 				return
 			"dodged":
 				combat_event.emit("피했다!", Color(1.0, 0.7, 0.4))
+			"crate", "none":
+				_shake = maxf(_shake, 0.25)
 			_:
 				add_gauge(info.damage * Weapons.GAUGE.dealt)
 				_on_hit_landed(info.react == "stagger")
@@ -1421,7 +1550,7 @@ func _on_hit_landed(big: bool) -> void:
 func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 	var horiz := Vector2(velocity.x, velocity.z).length()
 	# 걸을 때 화면이 살짝 흔들림
-	if on_floor and horiz > 0.5 and sm.state != "dash":
+	if on_floor and horiz > 0.5 and not sm.is_in(["dash", "slide"]):
 		_bob_t += delta * horiz * 1.9
 	else:
 		_bob_t = lerpf(_bob_t, roundf(_bob_t / PI) * PI, clampf(delta * 6.0, 0, 1))
@@ -1440,6 +1569,8 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 		# 벽 반대쪽으로 화면이 기운다
 		var ln := global_transform.basis.inverse() * _run_n
 		roll_target = ln.x * deg_to_rad(12.0)
+	elif sm.state == "slide":
+		roll_target = deg_to_rad(-4.0)
 	_roll = lerpf(_roll, roll_target, clampf(delta * 10.0, 0, 1))
 	camera.rotation = _kick + Vector3(0, 0, _roll)
 	# 달리거나 대시할 때 시야가 넓어짐
@@ -1447,6 +1578,8 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 	if sm.state == "dash":
 		target_fov = 90.0
 	elif sm.state == "wallrun":
+		target_fov = 92.0
+	elif sm.state == "slide":
 		target_fov = 92.0
 	elif sm.state == "climb":
 		target_fov = 82.0
@@ -1697,6 +1830,11 @@ func _vertical_attack(kind: String) -> bool:
 		return false
 	var h := vkit.height_above_ground(14.0)
 	var looking_down := head.rotation.x < deg_to_rad(-18)
+	# 벽 차고 베기: 벽을 달리는 중이거나 벽을 막 차고 뛰었을 때 (아래를 보고 높이 있으면 낙하 찍기)
+	var off_wall := sm.state == "wallrun" or (_since_walljump < float(MoveSet.RUN.wall_slash_time) and sm.state == "free")
+	if off_wall and kind in ["combo", "light"] and not (looking_down and h >= PLUNGE_MIN_HEIGHT):
+		_wall_slash()
+		return true
 	if h >= PLUNGE_MIN_HEIGHT and (kind == "heavy" or looking_down or h >= 3.2):
 		if stamina < float(_mv("plunge").cost) * 0.5:
 			return false
@@ -2230,3 +2368,210 @@ func _teleport_behind(t: Node3D) -> void:
 	head.rotation.x = deg_to_rad(-8.0)
 	velocity = Vector3.ZERO
 	_shake = 0.4
+
+
+# ---------------- 앉기와 슬라이딩 (C) ----------------
+# 달리다가(빠르게 움직이다가) C 를 누르면 미끄러진다. 슬라이딩 중 Space 는 빠르기를 유지한 채 뛰어오르고,
+# 클릭은 다리 베기. 그 밖에는 C 를 누르고 있는 동안 앉아서 걷는다.
+
+func crouch_pressed() -> void:
+	if not _can_act():
+		return
+	if sm.state == "free" and is_on_floor():
+		try_slide()
+
+
+func try_slide() -> bool:
+	var hv := Vector2(velocity.x, velocity.z)
+	if hv.length() < float(MoveSet.RUN.slide_min_speed) or stamina < float(MoveSet.RUN.slide_cost) * 0.5:
+		return false
+	sm.go("slide")
+	return true
+
+
+func _slide_enter(_d: Dictionary) -> void:
+	var hv := Vector3(velocity.x, 0, velocity.z)
+	_slide_dir = hv.normalized()
+	_slide_speed = maxf(hv.length(), SPRINT_SPEED * 0.9) * float(MoveSet.RUN.slide_boost)
+	_use_stamina(float(MoveSet.RUN.slide_cost))
+	_set_low(true)
+	_pose_to(MoveSet.FP_POSES.slide, 0.12)
+	_play("dash", 0.8, -4.0)
+	Fx.sparks(get_parent(), global_position + Vector3.UP * 0.1, Vector3.UP, 8, Color(0.85, 0.78, 0.65))
+
+
+func _slide_update(delta: float) -> void:
+	var r: Dictionary = MoveSet.RUN
+	_slide_speed = maxf(_slide_speed - float(r.slide_friction) * delta, 0.0)
+	# 보는 쪽으로 살짝 꺾을 수 있다
+	var fwd := -transform.basis.z
+	fwd.y = 0
+	_slide_dir = _slide_dir.slerp(fwd.normalized(), clampf(delta * 1.5, 0, 1)).normalized()
+	velocity.x = _slide_dir.x * _slide_speed
+	velocity.z = _slide_dir.z * _slide_speed
+	if _can_act() and Input.is_action_just_pressed("jump"):
+		# 슬라이딩 점프: 미끄러지던 빠르기를 그대로 들고 뛴다 → 벽 달리기, 공중 베기로 이어진다
+		velocity.y = float(r.slide_jump)
+		_carry_t = 0.5
+		_play("jump")
+		sm.go("free")
+		return
+	if not is_on_floor() and sm.time > 0.15:
+		_carry_t = 0.4
+		sm.go("free")
+		return
+	var held := _can_act() and Input.is_action_pressed("crouch")
+	if _slide_speed <= float(r.slide_end_speed) or sm.time > float(r.slide_max_time) or (not held and sm.time > 0.25):
+		_carry_t = 0.3
+		sm.go("free")
+
+
+func _slide_exit() -> void:
+	if sm.state not in ["attack"]:
+		_pose_to(MoveSet.FP_POSES.rest, 0.15)
+
+
+func is_sliding() -> bool:
+	return sm.state == "slide"
+
+
+## 앉기: C 를 누르고 있고 땅 위에서 할 수 있는 상태면 앉는다. 일어설 자리가 없으면 계속 앉아 있는다.
+func _update_crouch(delta: float, on_floor: bool) -> void:
+	var want := _can_act() and Input.is_action_pressed("crouch") and on_floor \
+			and sm.is_in(["free", "block", "attack", "charge"])
+	var low := sm.state == "slide" or (sm.state == "attack" and _move == "sweep")
+	if not want and not low and _cap.height < 1.5 and _blocked_above():
+		want = true   # 머리 위가 막혀 있으면 일어서지 못한다
+	_crouching = want and not low
+	_set_low(want or low)
+	var target_y := 1.62
+	if low:
+		target_y = 0.85
+	elif _crouching:
+		target_y = 1.05
+	_head_y = lerpf(_head_y, target_y, clampf(delta * 14.0, 0, 1))
+	head.position.y = _head_y
+
+
+func _set_low(low: bool) -> void:
+	var h := 1.1 if low else 1.8
+	if is_equal_approx(_cap.height, h):
+		return
+	_cap.height = h
+	_col.position.y = h * 0.5
+
+
+func _blocked_above() -> bool:
+	return not _cast(global_position + Vector3.UP * 0.9, Vector3.UP * 1.0).is_empty()
+
+
+# ---------------- 벽 차고 베기 ----------------
+
+func _wall_slash() -> void:
+	var r: Dictionary = MoveSet.RUN
+	var look := -camera.global_transform.basis.z
+	look.y = 0
+	look = look.normalized()
+	var away := _run_n if sm.state == "wallrun" else Vector3.ZERO
+	if sm.state == "wallrun":
+		_since_walljump = 0.0
+		_play("wall_kick")
+	sm.go("free")
+	velocity = look * float(r.wall_slash_speed) + away * 2.5 + Vector3.UP * 1.8
+	_carry_t = 0.5
+	_start_attack("wall_slash")
+
+
+# ---------------- 주변 물건: 상자 ----------------
+# 상자(ArenaCrate)는 칼로 치거나 달려서 부딪히면 날아가고, 날아간 상자에 맞으면 아프다.
+# F 를 상자 가까이에서 누르면 들어 올리고, 다시 F 나 클릭으로 던진다.
+
+## 움직이다 상자에 부딪혔다: 달리던 중이면 걷어찬다, 아니면 살짝 민다
+func _bump_crate(c: ArenaCrate) -> void:
+	var hv := Vector3(velocity.x, 0, velocity.z)
+	if hv.length() < 1.0 and _pre_speed < 1.0:
+		return
+	var speed := maxf(hv.length(), _pre_speed)
+	var d := (c.global_position - global_position)
+	d.y = 0
+	d = d.normalized() if d.length() > 0.05 else -transform.basis.z
+	if (sm.state == "slide" or speed > 6.0) and c.can_kick():
+		c.kick(d * (speed * 1.5 + 2.0) + Vector3.UP * 3.0, self)
+		_play(_wsnd("swing"), 0.7, -6.0)
+	else:
+		c.nudge(d * speed * 0.8)
+
+
+## 들 수 있는 상자 (앞쪽 가까이, 상대가 바로 앞에 있으면 잡기가 먼저)
+func _crate_in_reach() -> ArenaCrate:
+	if arena == null:
+		return null
+	var fwd := -transform.basis.z
+	fwd.y = 0
+	fwd = fwd.normalized()
+	var best: ArenaCrate = null
+	var best_d := 2.2
+	for c in arena.crates:
+		var cr := c as ArenaCrate
+		if cr == null or not cr.can_pick():
+			continue
+		var to := cr.global_position - global_position
+		if absf(to.y) > 1.4:
+			continue
+		to.y = 0
+		var d := to.length()
+		if d < best_d and (d < 0.8 or fwd.dot(to / d) > 0.4):
+			best = cr
+			best_d = d
+	if best != null and opponent != null and is_instance_valid(opponent):
+		var od := opponent.global_position.distance_to(global_position)
+		if od < float(_mv("grab").reach) + 0.4 and od < best_d + 0.6:
+			return null
+	return best
+
+
+func pick_crate(c: ArenaCrate) -> void:
+	held_crate = c
+	c.pick_up(self)
+	_pose_to(MoveSet.FP_POSES.carry, 0.15)
+	_play("grab_whoosh", 0.8)
+
+
+func throw_crate() -> void:
+	if held_crate == null:
+		return
+	var c := held_crate
+	held_crate = null
+	var aim := -camera.global_transform.basis.z
+	c.throw_from(camera.global_position + aim * 1.1, aim * ArenaCrate.THROW_SPEED + Vector3.UP * 2.5, self)
+	_kick.x += deg_to_rad(-3.0)
+	_use_stamina(8.0)
+	_play(_wsnd("swing_heavy"))
+	_pose_to(MoveSet.FP_POSES.rest, 0.2)
+	attack_started.emit("crate")
+
+
+func drop_crate() -> void:
+	if held_crate == null:
+		return
+	var c := held_crate
+	held_crate = null
+	c.throw_from(c.global_position, velocity * 0.5, null)
+	_pose_to(MoveSet.FP_POSES.rest, 0.2)
+
+
+func _update_held_crate() -> void:
+	if held_crate == null:
+		return
+	if not is_instance_valid(held_crate) or dead or not sm.is_in(["free", "dash", "slide"]):
+		drop_crate()
+		return
+	var fwd := -camera.global_transform.basis.z
+	held_crate.global_position = camera.global_position + fwd * 1.0 + Vector3.DOWN * 0.35
+	held_crate.global_rotation = Vector3(0, rotation.y, 0)
+
+
+## 기둥이 내 쪽으로 쓰러진다 (BreakablePillar 가 알려 준다)
+func on_falling_hazard(_axis: Vector3, _from: Vector3) -> void:
+	combat_event.emit("기둥이 쓰러진다! 피해!", Color(1.0, 0.55, 0.3))
+	_shake = maxf(_shake, 0.4)

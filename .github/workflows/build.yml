@@ -48,6 +48,11 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/vertical_test.gd 2>&1 | tee vertical.log
           grep -q "VERTICAL => OK" vertical.log
 
+      - name: 자동 점검 (달리기, 슬라이딩, 연속기 갈래, 상황별 공격, 상자, 기둥)
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/free_move_test.gd 2>&1 | tee free.log
+          grep -q "FREEMOVE => OK" free.log
+
       - name: 자동 점검 (효과음, 배경음악)
         run: |
           godot --headless --fixed-fps 60 -s res://tests/audio_test.gd 2>&1 | tee audio.log

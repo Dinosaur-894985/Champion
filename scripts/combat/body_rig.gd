@@ -44,6 +44,8 @@ var _dash_amt := 0.0
 var _dash_local := Vector3.ZERO
 var _reach_amt := 0.0
 const REACH_ANGLE := -1.45
+var low := 0.0                   # 0~1, 낮게 미끄러지기 (다리 베기)
+var _low_amt := 0.0
 var frozen := false              # 쓰러진 뒤에는 움직임을 멈춘다
 
 
@@ -135,7 +137,13 @@ func animate(delta: float, local_vel: Vector3) -> void:
 	_torso.rotation.z = lerpf(_torso.rotation.z, roll, tk) + _kick.z * 0.4
 	_head.rotation = Vector3(_kick.x * 0.6, 0, _kick.z * 0.6)
 	_arm_r.rotation += shake
-	position = Vector3(0, 0, _kick.x * -0.08)
+	# 미끄러질 때: 몸을 낮추고 뒤로 젖히며 한쪽 다리를 앞으로 뻗는다
+	_low_amt = lerpf(_low_amt, low, clampf(delta * 12.0, 0, 1))
+	if _low_amt > 0.01:
+		_leg_l.rotation.x = lerpf(_leg_l.rotation.x, -1.35, _low_amt)
+		_leg_r.rotation.x = lerpf(_leg_r.rotation.x, 0.6, _low_amt)
+	rotation.x = _low_amt * 0.35
+	position = Vector3(0, -_low_amt * 0.55, _kick.x * -0.08)
 
 	# 맞으면 번쩍
 	if _flash > 0.0:
