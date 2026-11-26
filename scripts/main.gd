@@ -91,7 +91,10 @@ func _setup_duel() -> void:
 	duelist = Duelist.new()
 	if current_opponent == null:
 		current_opponent = make_opponent(opponent_mode, player.build)
-	duelist.build = current_opponent
+	# 같은 색끼리 맞붙으면(거울 모드 등) 상대 옷 색을 바꿔 알아보기 쉽게 한다
+	var ob: CharacterBuild = current_opponent.duplicate_build()
+	ob.contrast_with(player.build)
+	duelist.build = ob
 	duelist.position = Vector3(0, 0.1, -6.0)
 	duelist.arena = arena
 	add_child(duelist)

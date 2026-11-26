@@ -29,7 +29,7 @@ static func play(sound: String, at: Variant = null, vol_db := 0.0, pitch := 1.0)
 
 ## 무기에 맞는 소리 이름. kind: swing / swing_heavy / clash / hit
 static func weapon_sound(kind: String, weapon: String) -> String:
-	var w := weapon if weapon in ["sword", "greatsword", "daggers", "spear"] else "sword"
+	var w := weapon if weapon in ["sword", "greatsword", "daggers", "spear", "staff", "shuriken", "fists"] else "sword"
 	if kind == "swing_heavy":
 		return "swing_%s_heavy" % w
 	return "%s_%s" % [kind, w]

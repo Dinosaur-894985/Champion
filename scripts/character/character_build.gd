@@ -68,13 +68,86 @@ const PRESETS := {
 	"암살자": {"weapon": "daggers", "stats": {"str": 4, "vit": 3, "agi": 8, "tec": 7, "end": 3}, "skills": ["wall", "blink"]},
 	"사냥꾼": {"weapon": "spear", "stats": {"str": 6, "vit": 4, "agi": 6, "tec": 4, "end": 7}, "skills": ["grapple", "double_jump"]},
 	"광전사": {"weapon": "greatsword", "stats": {"str": 10, "vit": 6, "agi": 4, "tec": 3, "end": 3}, "skills": ["haste", "iron_guard"]},
+	"봉술가": {"weapon": "staff", "stats": {"str": 5, "vit": 6, "agi": 5, "tec": 6, "end": 6}, "skills": ["double_jump"]},
+	"수리검사": {"weapon": "shuriken", "stats": {"str": 4, "vit": 4, "agi": 6, "tec": 6, "end": 5}, "skills": ["wall", "blink"]},
+	"격투가": {"weapon": "fists", "stats": {"str": 6, "vit": 6, "agi": 6, "tec": 6, "end": 3}, "skills": ["haste", "double_jump"]},
 }
-const PRESET_ORDER := ["검객", "탱커", "암살자", "사냥꾼", "광전사"]
+const PRESET_ORDER := ["검객", "탱커", "암살자", "사냥꾼", "광전사", "봉술가", "수리검사", "격투가"]
+## 정해진 상대의 겉모습 [색, 피부, 머리, 옷 한 벌]
+const PRESET_LOOKS := {
+	"검객": [0, 1, 0, "knight"], "탱커": [3, 2, 3, "heavy"], "암살자": [4, 0, 1, "rogue"], "사냥꾼": [5, 3, 2, "lancer"],
+	"광전사": [1, 2, 2, "heavy"], "봉술가": [6, 1, 1, "monk"], "수리검사": [2, 0, 0, "shadow"], "격투가": [7, 3, 3, "brawler"],
+}
+
+## 옷과 장비: 부위마다 따로 고른다 (무기와 상관없다). 모양 이름은 BodyRig 가 그린다.
+const PART_ORDER := ["head", "torso", "arms", "legs", "feet"]
+const PART_LABELS := {"head": "모자", "torso": "몸통", "arms": "팔", "legs": "다리", "feet": "신발"}
+const STYLE_ORDER := ["knight", "heavy", "rogue", "lancer", "monk", "shadow", "brawler"]
+## 부위마다 모양 이름 (STYLE_ORDER 순서)
+const PART_NAMES := {
+	"head": ["반투구", "닫힌 투구", "두건", "볏 투구", "머리띠", "복면", "맨머리"],
+	"torso": ["기사 가슴판", "중갑과 망토", "가죽 조끼", "비늘 갑옷", "도복", "목도리 옷", "민소매"],
+	"arms": ["팔 보호대", "철 팔갑옷", "가죽 토시", "천 소매", "넓은 소매", "검은 토시", "맨팔"],
+	"legs": ["무릎 갑옷", "다리 갑옷", "가죽 바지", "정강이받이", "도복 바지", "감은 바지", "넉넉한 바지"],
+	"feet": ["가죽 장화", "철 장화", "검은 장화", "쇠코 장화", "짚신", "끈 신", "맨발"],
+}
+## 옷 한 벌로 맞춰 입을 때의 이름
+const SET_NAMES := ["기사", "중갑", "도적", "창병", "무도가", "그림자", "싸움꾼"]
+
+## 겉모습 (점수를 먹지 않는다). 옷은 아래 PARTS 에서 부위마다 고른다. 몸집은 능력치(힘, 체력, 민첩)를 따라 저절로 바뀐다.
+## 색: 옷과 무기 감개, 술에 쓰인다. [이름, 색]
+const COLORS := [
+	["청록", Color(0.08, 0.55, 0.56)], ["진홍", Color(0.72, 0.13, 0.16)], ["남색", Color(0.16, 0.24, 0.62)],
+	["황금", Color(0.82, 0.6, 0.16)], ["보라", Color(0.46, 0.22, 0.62)], ["숲", Color(0.22, 0.48, 0.22)],
+	["주황", Color(0.9, 0.42, 0.1)], ["먹색", Color(0.2, 0.21, 0.24)],
+]
+const SKINS := [Color(0.96, 0.8, 0.66), Color(0.87, 0.67, 0.5), Color(0.66, 0.46, 0.3), Color(0.42, 0.28, 0.18)]
+const HAIRS := ["짧은 머리", "묶은 머리", "뻗친 머리", "민머리"]
+const HAIR_COLORS := [Color(0.1, 0.08, 0.07), Color(0.35, 0.2, 0.1), Color(0.75, 0.6, 0.35), Color(0.55, 0.55, 0.58)]
 
 var name := "나"
 var weapon := "sword"
 var stats := {"str": 5, "vit": 5, "agi": 5, "tec": 5, "end": 5}
 var skills: Array = ["wall", "double_jump"]
+var color := 0
+var skin := 1
+var hair := 0
+var parts := {"head": "knight", "torso": "knight", "arms": "knight", "legs": "knight", "feet": "knight"}
+
+
+## 부위가 고른 모양 (없거나 틀리면 기사)
+func part(p: String) -> String:
+	var v := str(parts.get(p, "knight"))
+	return v if v in STYLE_ORDER else "knight"
+
+
+func part_name(p: String) -> String:
+	return PART_NAMES[p][STYLE_ORDER.find(part(p))]
+
+
+## 모든 부위를 한 벌로 맞춘다
+func wear_set(style: String) -> void:
+	for p in PART_ORDER:
+		parts[p] = style if style in STYLE_ORDER else "knight"
+
+
+func accent() -> Color:
+	return COLORS[clampi(color, 0, COLORS.size() - 1)][1]
+
+
+func skin_color() -> Color:
+	return SKINS[clampi(skin, 0, SKINS.size() - 1)]
+
+
+## 머리색은 색과 머리 모양으로 정해진다 (따로 고르지 않아도 다양하게)
+func hair_color() -> Color:
+	return HAIR_COLORS[(color + hair * 3) % HAIR_COLORS.size()]
+
+
+## 같은 모습끼리 맞붙을 때(거울 모드 등) 상대를 알아보기 쉽게 색을 바꾼다
+func contrast_with(other: CharacterBuild) -> void:
+	if other != null and other.color == color:
+		color = (color + 4) % COLORS.size()
 
 
 # ---------------- 점수 ----------------
@@ -137,6 +210,10 @@ func duplicate_build() -> CharacterBuild:
 	b.weapon = weapon
 	b.stats = stats.duplicate()
 	b.skills = skills.duplicate()
+	b.color = color
+	b.skin = skin
+	b.hair = hair
+	b.parts = parts.duplicate()
 	return b
 
 
@@ -221,6 +298,15 @@ static func random_build(rng: RandomNumberGenerator = null) -> CharacterBuild:
 	for k in STAT_ORDER:
 		b.stats[k] = STAT_MIN
 	b.skills = []
+	b.color = rng.randi_range(0, COLORS.size() - 1)
+	b.skin = rng.randi_range(0, SKINS.size() - 1)
+	b.hair = rng.randi_range(0, HAIRS.size() - 1)
+	# 옷: 한 벌로 맞추거나, 부위마다 섞어 입는다
+	b.wear_set(STYLE_ORDER[rng.randi_range(0, STYLE_ORDER.size() - 1)])
+	if rng.randf() < 0.5:
+		for p in PART_ORDER:
+			if rng.randf() < 0.5:
+				b.parts[p] = STYLE_ORDER[rng.randi_range(0, STYLE_ORDER.size() - 1)]
 	var pool := SKILL_ORDER.duplicate()
 	var n := 2 if rng.randf() < 0.75 else 1
 	for i in n:
@@ -256,6 +342,11 @@ static func preset(preset_name: String) -> CharacterBuild:
 	b.weapon = p.get("weapon", "sword")
 	b.stats = p.stats.duplicate()
 	b.skills = p.skills.duplicate()
+	var look: Array = PRESET_LOOKS.get(preset_name, [0, 1, 0, "knight"])
+	b.color = look[0]
+	b.skin = look[1]
+	b.hair = look[2]
+	b.wear_set(look[3])
 	return b
 
 
@@ -264,6 +355,10 @@ func save() -> void:
 	cfg.set_value("build", "weapon", weapon)
 	cfg.set_value("build", "stats", stats)
 	cfg.set_value("build", "skills", skills)
+	cfg.set_value("look", "color", color)
+	cfg.set_value("look", "skin", skin)
+	cfg.set_value("look", "hair", hair)
+	cfg.set_value("look", "parts", parts)
 	cfg.save(SAVE_PATH)
 
 
@@ -284,6 +379,14 @@ static func load_saved() -> CharacterBuild:
 		for s in sk:
 			if SKILLS.has(s) and not (s in cand.skills):
 				cand.skills.append(s)
+		cand.color = clampi(int(cfg.get_value("look", "color", 0)), 0, COLORS.size() - 1)
+		cand.skin = clampi(int(cfg.get_value("look", "skin", 1)), 0, SKINS.size() - 1)
+		cand.hair = clampi(int(cfg.get_value("look", "hair", 0)), 0, HAIRS.size() - 1)
+		var pt = cfg.get_value("look", "parts", {})
+		if pt is Dictionary:
+			for p in PART_ORDER:
+				if str(pt.get(p, "")) in STYLE_ORDER:
+					cand.parts[p] = str(pt[p])
 		if cand.is_valid():
 			return cand
 	return b
