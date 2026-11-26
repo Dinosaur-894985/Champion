@@ -166,6 +166,7 @@ func _block_shuriken(p: Player, ai: Duelist) -> void:
 		ai._dist = 8.0
 		ai._dir = Vector3(0, 0, 1)
 		ai._start_attack("heavy")
+		ai._feint_checked = true   # 이 점검은 막기만 본다 (속임수로 근접 공격으로 바뀌지 않게)
 	if _f > 2 and _f < 60:
 		if OS.get_environment("NW_DEBUG") != "" and _f % 4 == 0:
 			print("f=%d ai=%s atk=%s p=%s guard=%s v=%s" % [_f, ai.state, ai._attack, p.sm.state, p.guard_dir, _v])
@@ -183,6 +184,7 @@ func _block_shuriken(p: Player, ai: Duelist) -> void:
 		ai._dist = 8.0
 		ai._dir = Vector3(0, 0, 1)
 		ai._start_attack("heavy")
+		ai._feint_checked = true   # 이 점검은 막기만 본다 (속임수로 근접 공격으로 바뀌지 않게)
 	if _f > 60 and _f < 120:
 		ai._think_t = 1.0
 	if _f == 120:
