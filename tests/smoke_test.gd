@@ -317,6 +317,17 @@ func _set_goal(player: Player, ai: Duelist) -> void:
 
 
 func _report_and_quit() -> void:
+	# 웹(WebGL) 버전은 그릴 물체가 약 1000개를 넘으면 화면이 통째로 안 그려진다. 넉넉히 남겨 둔다.
+	var meshes := 0
+	var stack: Array = [root]
+	while not stack.is_empty():
+		var n: Node = stack.pop_back()
+		if n is MeshInstance3D:
+			meshes += 1
+		stack.append_array(n.get_children())
+	print("MESHES %d" % meshes)
+	if meshes > 750:
+		_fail.append("too many meshes for web: %d" % meshes)
 	print("SMOKE => %s %s" % ["OK" if _fail.is_empty() else "FAIL", _fail])
 	_phase = "done"
 	quit(0 if _fail.is_empty() else 1)

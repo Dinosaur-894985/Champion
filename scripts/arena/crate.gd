@@ -78,6 +78,8 @@ func setup(at: Vector3, mats: Dictionary) -> void:
 	for z in [-1.0, 1.0]:
 		var d := LowPoly.part(_visual, LowPoly.box(Vector3(0.08, SIZE * 1.2, 0.04)), dark, Vector3(0, 0, z * (SIZE * 0.5 - 0.01)))
 		d.rotation.z = deg_to_rad(45)
+	# 조각 16개를 한 덩어리로 (웹 버전이 그릴 물체 수를 줄인다)
+	LowPoly.merge_children(_visual)
 
 
 func _physics_process(delta: float) -> void:
