@@ -58,7 +58,7 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/audio_test.gd 2>&1 | tee audio.log
           grep -q "AUDIO => OK" audio.log
 
-      - name: 자동 점검 (새 무기: 봉, 수리검, 맨몸 격투 / 겉모습)
+      - name: "자동 점검 (새 무기: 봉, 수리검, 맨몸 격투, 겉모습)"
         run: |
           godot --headless --fixed-fps 60 -s res://tests/new_weapons_test.gd 2>&1 | tee newweapons.log
           grep -q "NEWWEAPONS => OK" newweapons.log
