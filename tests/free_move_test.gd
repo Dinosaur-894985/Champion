@@ -1,15 +1,16 @@
 extends SceneTree
 ## 자유로운 움직임 점검.
-##  1) 달리기: Shift 를 누르면 순간 돌진 없이 빨라진다. Shift + 옆 = 피하기 대시
+##  1) 달리기: Shift 를 누르면 걷기에서 점점 빨라진다 (순간 돌진 없음). Shift + 옆 = 옆으로 달리기 (피하기 아님)
 ##  2) 슬라이딩: 달리다 C → 미끄러짐, 몸이 낮아짐, 미끄러지다 Space → 빠르기를 지닌 채 점프
 ##  3) 연속기 갈래: 옆→위→위 = 베기, 올려베기, 쪼개기 / 옆 네 번 = 회전 베기
 ##  4) 달리며 찌르기  5) 슬라이딩 다리 베기 (넘어뜨림)  6) 벽 차고 베기
-##  7) 상자를 베어 날려 AI 맞히기  8) 상자 들어 던지기  9) 돌기둥을 쓰러뜨려 AI 덮치기
-## 10) AI 가 달려들기/미끄러지기/뛰어 베기와 상자 차기를 쓴다
+##  7) 피하기: 같은 방향키를 빠르게 두 번 (한 번은 그냥 걷기)  8) 바람 발판: 기둥 꼭대기와 한가운데로 날아간다
+##  9) 돌기둥을 쓰러뜨려 AI 덮치기  10) AI 가 달려들기/미끄러지기/뛰어 베기를 쓰고, 바람 발판을 타고 쫓아온다
 ## 실행: godot --headless --fixed-fps 60 -s res://tests/free_move_test.gd   (사진: -- shots=폴더)
 
 const GAME := preload("res://scenes/main.tscn")
 const PARTS := 10
+const TIER_TOP := 6.5
 
 var _game: Node
 var _f := 0
@@ -80,8 +81,8 @@ func _process(_delta: float) -> bool:
 		4: _run_thrust(p, ai)
 		5: _sweep(p, ai)
 		6: _wall_slash(p, ai)
-		7: _crate_hit(p, ai)
-		8: _crate_throw(p, ai)
+		7: _dodge(p, ai)
+		8: _pads(p, ai)
 		9: _pillar(p, ai)
 		10: _ai_moves(p, ai)
 	return false
@@ -129,22 +130,32 @@ func _sprint(p: Player, ai: Duelist) -> void:
 		_v.walk = _hspeed(p)
 		Input.action_press("sprint")
 		p.sprint_pressed()
-	if _f > 20 and _f <= 26:
-		_v.early = maxf(_v.get("early", 0.0), _hspeed(p))
-	if _f > 20 and _f <= 50 and p.sm.state == "dash":
+	if _f == 26:
+		_v.early = _hspeed(p)
+	if _f > 20 and p.sm.state == "dash":
 		_v.dashed = true
-	if _f == 50:
+	if _f == 70:
 		_v.run = _hspeed(p)
 		_shot("f1_sprint")
 		Input.action_release("move_forward")
 		Input.action_press("move_left")
 		p.sprint_pressed()
+	if _f == 110:
+		_v.side = _hspeed(p)
 		_v.side_state = p.sm.state
-	if _f == 60:
-		var ok: bool = not _v.has("dashed") and _v.run > 7.3 and _v.early < 8.6 and _v.early > _v.walk + 0.5 \
-				and _v.side_state == "dash"
-		_check("SPRINT", ok, "walk=%.1f first0.1s=%.1f after0.5s=%.1f forward_dash=%s side=%s"
-				% [_v.walk, _v.early, _v.run, _v.has("dashed"), _v.side_state])
+	if _f == 115:
+		# 가만히 서서 Shift 만 눌러도 피하기(점멸)가 나가지 않는다
+		Input.action_release("move_left")
+		Input.action_release("sprint")
+		p.velocity = Vector3.ZERO
+		Input.action_press("sprint")
+		p.sprint_pressed()
+	if _f == 130:
+		Input.action_release("sprint")
+		var ok: bool = not _v.has("dashed") and _v.run > 7.3 and _v.early < _v.walk + 1.6 and _v.early > _v.walk + 0.2 \
+				and _v.side > 5.6 and _v.side < _v.run and _v.side_state == "free"
+		_check("SPRINT", ok, "walk=%.1f first0.1s=%.1f after0.8s=%.1f side_run=%.1f any_dash=%s side_state=%s"
+				% [_v.walk, _v.early, _v.run, _v.side, _v.has("dashed"), _v.side_state])
 		_next()
 
 
@@ -286,52 +297,58 @@ func _wall_slash(p: Player, ai: Duelist) -> void:
 		_next()
 
 
-# 7) 상자를 베어 날려서 AI 를 맞힌다
-func _crate_hit(p: Player, ai: Duelist) -> void:
-	var arena: Arena = _game.arena
-	var c: ArenaCrate = arena.crates[0]
+# 7) 피하기: 방향키 한 번은 그냥 걷기, 빠르게 두 번이면 그쪽으로 짧게 피한다
+func _dodge(p: Player, ai: Duelist) -> void:
 	if _f == 1:
-		var at := Vector3(0, 0.1, 6.0)
-		c.global_position = at + Vector3(0, ArenaCrate.SIZE * 0.5, -1.1)
-		c.linear_velocity = Vector3.ZERO
-		_place(p, at, 0.0)
-		_hold_ai(ai, Vector3(0, 0.1, -1.0), PI)
-	if _f == 30:
-		p.attack_pressed("", 0.0)
-		p.attack_released()
-	if _f > 30:
-		_v.max_v = maxf(_v.get("max_v", 0.0), c.linear_velocity.length())
-	if _f == 42:
-		_shot("f7_crate_fly")
-	if _f == 120:
-		_check("CRATEHIT", _v.get("max_v", 0.0) > 8.0 and ai.hp < 100000,
-				"crate_speed=%.1f ai_dmg=%d crate_broken=%s" % [_v.get("max_v", 0.0), 100000 - ai.hp, c._gone > 0.0])
+		_hold_ai(ai, Vector3(-20, 0.1, 0))
+		_place(p, Vector3(0, 0.1, 4), 0.0)
+	if _f == 10:
+		_v.x0 = p.global_position.x
+		p._tap_dodge("move_right", Vector2(1, 0))
+		_v.one_tap = p.sm.state
+	if _f == 40:
+		p._tap_dodge("move_left", Vector2(-1, 0))
+	if _f == 46:
+		p._tap_dodge("move_left", Vector2(-1, 0))
+		_v.two_tap = p.sm.state
+	if _f == 70:
+		var moved: float = _v.x0 - p.global_position.x
+		_check("DODGE", _v.one_tap == "free" and _v.two_tap == "dash" and moved > 1.2,
+				"one_tap=%s double_tap=%s moved_left=%.2f" % [_v.one_tap, _v.two_tap, moved])
 		_next()
 
 
-# 8) 상자를 들어서 던진다
-func _crate_throw(p: Player, ai: Duelist) -> void:
+# 8) 바람 발판: 안쪽 발판은 기둥 꼭대기로, 바깥 발판은 경기장 한가운데로 날려 보낸다
+func _pads(p: Player, ai: Duelist) -> void:
 	var arena: Arena = _game.arena
-	var c: ArenaCrate = arena.crates[0]
-	if _f == 1:
-		var at := Vector3(0, 0.1, 6.0)
-		c.global_position = at + Vector3(0, ArenaCrate.SIZE * 0.5, -1.0)
-		c.linear_velocity = Vector3.ZERO
-		_place(p, at, 0.0)
-		_hold_ai(ai, Vector3(0, 0.1, -2.0), PI)
-	if _f == 30:
-		p.try_grab()
-		_v.held = p.held_crate == c
-	if _f == 45:
-		_shot("f8_carry")
-	if _f == 60:
-		p.throw_crate()
-	if _f > 60:
-		_v.max_v = maxf(_v.get("max_v", 0.0), c.linear_velocity.length())
-	if _f == 140:
-		_check("CRATETHROW", _v.held and _v.get("max_v", 0.0) > 12.0 and ai.hp < 100000,
-				"picked=%s throw_speed=%.1f ai_dmg=%d" % [_v.held, _v.get("max_v", 0.0), 100000 - ai.hp])
+	_hold_ai(ai, Vector3(-20, 0.1, 12))
+	var tests := [0, 2]   # pad_sw (기둥 꼭대기), pad_w (한가운데)
+	var k := int(_v.get("k", 0))
+	if k >= tests.size():
+		_check("LAUNCHPAD", _v.get("ok", 0) == tests.size(), str(_v.get("log", [])))
 		_next()
+		return
+	var pad: LaunchPad = arena.pads[tests[k]]
+	if not _v.has("t0"):
+		_v.t0 = _f
+		_place(p, pad.global_position + Vector3(0, 0.1, 0), 0.0)
+		_v.peak = 0.0
+	_v.peak = maxf(_v.peak, p.global_position.y)
+	if OS.get_environment("FM_DEBUG") != "" and (_f - _v.t0) % 10 == 0:
+		print("  fly ", p.global_position, " v=", p.velocity, " st=", p.sm.state, " fl=", p._flying)
+	if _f - _v.t0 == 40:
+		_shot("f8_pad_%d" % k)
+	if _f - _v.t0 > 30 and p.is_on_floor() and not p._flying or _f - _v.t0 > 400:
+		var land := p.global_position
+		var err := Vector2(land.x - pad.target.x, land.z - pad.target.z).length()
+		var ok: bool = err < 0.9 and absf(land.y - pad.target.y) < 0.4 and _v.peak > pad.target.y + 1.0
+		var log: Array = _v.get("log", [])
+		log.append("%s err=%.2f y=%.2f peak=%.1f" % [pad.id, err, land.y, _v.peak])
+		_v.log = log
+		_v.ok = int(_v.get("ok", 0)) + (1 if ok else 0)
+		_v.k = k + 1
+		_v.erase("t0")
+		p.hp = 1000
 
 
 # 9) 금 간 돌기둥을 쳐서 그 너머 AI 를 덮친다
@@ -355,32 +372,19 @@ func _pillar(p: Player, ai: Duelist) -> void:
 
 # 10) AI 가 새 움직임을 쓴다: 떨어져 서 있는 상대에게 달려들거나 미끄러지거나 뛰어 베고, 옆의 상자를 찬다
 func _ai_moves(p: Player, ai: Duelist) -> void:
-	var arena: Arena = _game.arena
 	if _f == 1:
 		_place(p, Vector3(0, 0.1, 5.0), PI)
 		ai.global_position = Vector3(0, 0.1, -3.0)
 		ai.hp = 100000
 		ai.max_hp = 100000
 		p.hp = 100000
-		var c: ArenaCrate = arena.crates[0]
-		c.global_position = Vector3(1.2, ArenaCrate.SIZE * 0.5 + 0.05, -3.0)
 	p.controls_enabled = true
-	if _f % 240 == 120 and ai.stats.get("crate_kick", 0) == 0:
-		# 상자를 AI 옆에 다시 놓아 준다 (차여서 멀리 갔을 수 있다)
-		var c2: ArenaCrate = arena.crates[0]
-		if c2.can_pick():
-			var side := Vector3(-ai._dir.z, 0, ai._dir.x)
-			c2.global_position = ai.global_position + side * 1.3 + Vector3.UP * (ArenaCrate.SIZE * 0.5 + 0.05)
-			c2.linear_velocity = Vector3.ZERO
-	if ai.state == "kick":
-		_shot_once("f10_ai_kick")
 	if ai.state == "windup" and ai._attack == "sweep":
 		_shot_once("f10_ai_sweep")
 	# 플레이어는 가끔 뒤로 물러나 거리를 벌린다
 	# 플레이어는 가끔 뒤로 크게 물러나 거리를 벌린다
 	var st0 := ai.stats
-	var need: bool = st0.get("move_run_thrust", 0) + st0.get("move_sweep", 0) + st0.get("move_air_slash", 0) == 0 \
-			or st0.get("crate_kick", 0) == 0
+	var need: bool = st0.get("move_run_thrust", 0) + st0.get("move_sweep", 0) + st0.get("move_air_slash", 0) == 0
 	if _f - int(_v.get("tp", 0)) > 90 and need and ai.state in ["approach", "circle", "idle"]:
 		_v.tp = _f
 		var away := p.global_position - ai.global_position
@@ -389,12 +393,31 @@ func _ai_moves(p: Player, ai: Duelist) -> void:
 		p.velocity = Vector3.ZERO
 	var st := ai.stats
 	var moving: int = st.get("move_run_thrust", 0) + st.get("move_sweep", 0) + st.get("move_air_slash", 0)
-	if (moving >= 1 and st.get("crate_kick", 0) >= 1) or _f >= 3000:
+	if moving >= 1 and not _v.has("moves_ok"):
+		_v.moves_ok = _f
+		_check("AIMOVES", true, "frames=%d run_thrust=%d sweep=%d air_slash=%d"
+				% [_f, st.get("move_run_thrust", 0), st.get("move_sweep", 0), st.get("move_air_slash", 0)])
+		# 이어서: 플레이어가 기둥 꼭대기에 올라가 있으면 AI 가 바람 발판을 타고 쫓아온다
+		p.global_position = Vector3(-7.0, TIER_TOP + 0.1, 7.0)
+		p.velocity = Vector3.ZERO
+		ai.global_position = Vector3(-13.0, 0.1, 10.5)
+		ai.velocity = Vector3.ZERO
+		ai.traits["wall_climb"] = false
+		_v.chase_t = _f
+	if _v.has("chase_t"):
+		p.global_position = Vector3(-7.0, TIER_TOP + 0.1, 7.0)
+		p.velocity = Vector3.ZERO
+		if st.get("launch", 0) >= 1 and ai.global_position.y > TIER_TOP - 0.5 and ai.is_on_floor():
+			_check("AIPAD", true, "frames=%d launches=%d" % [_f - int(_v.chase_t), st.get("launch", 0)])
+			_next()
+		elif _f - int(_v.chase_t) > 1200:
+			_check("AIPAD", false, "launches=%d ai_pos=%s" % [st.get("launch", 0), ai.global_position])
+			_next()
+	elif _f >= 3000:
 		if OS.get_environment("FM_DEBUG") != "":
 			print(st)
-		_check("AIMOVES", moving >= 1 and st.get("crate_kick", 0) >= 1,
-				"frames=%d run_thrust=%d sweep=%d air_slash=%d crate_kick=%d"
-				% [_f, st.get("move_run_thrust", 0), st.get("move_sweep", 0), st.get("move_air_slash", 0), st.get("crate_kick", 0)])
+		_check("AIMOVES", false, "frames=%d run_thrust=%d sweep=%d air_slash=%d"
+				% [_f, st.get("move_run_thrust", 0), st.get("move_sweep", 0), st.get("move_air_slash", 0)])
 		_next()
 
 

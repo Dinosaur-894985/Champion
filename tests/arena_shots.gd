@@ -14,6 +14,8 @@ const SPOTS := [
 	["a7_edge", Vector3(0, 0.1, 22), 180.0, -18.0],
 	["a8_obelisk", Vector3(-15, 0.1, -8), 48.0, 14.0],
 	["a9_high", Vector3(20, 8, 20), 45.0, -22.0],
+	["a10_pad", Vector3(-14, 0.1, 11), -45.0, -12.0],
+	["a11_flight", Vector3(-11, 9, 0), -90.0, -28.0],
 ]
 
 var _game: Node
