@@ -381,6 +381,14 @@ static func ai(weapon: String, key: String) -> float:
 #   sleeve : 1인칭 소매 재질
 # 돌려주는 값: {"root": 무기 노드, "tip": 끝 노드, "mat": 빛나는 날 재질, "len": 날 길이, "grip2": 두 번째 손 자리(없으면 null)}
 
+## 맞는 순간 멈춤(히트스톱) 길이 배율. 무거운 무기일수록 오래 멈춘다 (기본 0.045초, 큰 타격 0.075초)
+const HITSTOP := {"sword": 1.0, "greatsword": 1.55, "daggers": 0.7, "spear": 1.0, "staff": 1.15,
+		"shuriken": 0.6, "fists": 0.85}
+
+static func hitstop_time(weapon: String, big: bool) -> float:
+	return (0.075 if big else 0.045) * float(HITSTOP.get(weapon, 1.0))
+
+
 ## 무기마다 두 손으로 쥐는 자리 (손잡이 기준 +Y 거리). 없으면 한 손 무기.
 const GRIP2 := {"greatsword": -0.2, "spear": 0.72, "staff": 0.42}
 

@@ -65,6 +65,24 @@ func _ready() -> void:
 	if thrower is CollisionObject3D:
 		_ray.exclude = [(thrower as CollisionObject3D).get_rid()]
 	_face()
+	_make_tail.call_deferred()
+
+
+## 날아가는 수리검 뒤의 가는 꼬리 (빛 자취). 수리검이 사라져도 꼬리는 잠깐 남았다가 지워진다.
+var _tail: SwingTrail
+
+func _make_tail() -> void:
+	if not is_inside_tree():
+		return
+	var a := Node3D.new()
+	a.position = Vector3(0, 0.035, 0)
+	add_child(a)
+	var b := Node3D.new()
+	b.position = Vector3(0, -0.035, 0)
+	add_child(b)
+	_tail = SwingTrail.attach(null, get_parent(), a, b, "star_tail")
+	_tail.auto_free = true
+	_tail.emitting = true
 
 
 func _face() -> void:
@@ -180,6 +198,7 @@ func _strike(body: Node3D, dir: Vector3) -> void:
 		_:
 			Fx.impact(get_parent(), global_position, dir + Vector3.UP * 0.2, Color(0.75, 0.1, 0.08), 8)
 			Audio.play("shuriken_hit", global_position)
+			Fx.hitstop(get_parent(), Weapons.hitstop_time("shuriken", str(info.get("guard", "")) == "break"))
 			queue_free()
 
 
@@ -213,6 +232,8 @@ func _reflect(by: Node3D) -> void:
 
 func _stick(normal: Vector3) -> void:
 	_stuck = true
+	if is_instance_valid(_tail):
+		_tail.emitting = false
 	_life = PICK_LIFE if info.get("ammo", false) else STUCK_LIFE
 	Audio.play("shuriken_stick", global_position, -4.0)
 	Fx.sparks(get_parent(), global_position, normal, 5, Color(1.0, 0.85, 0.5))

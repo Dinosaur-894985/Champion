@@ -42,6 +42,27 @@ static func impact(world: Node, pos: Vector3, dir: Vector3, color: Color, amount
 	p.material_override = m
 
 
+## 맞는 순간 멈춤(히트스톱): 아주 잠깐 시간을 거의 멈춰 '쿵' 하는 손맛을 준다.
+## 무거운 무기일수록 길다 (Weapons.HITSTOP). 다른 느린 화면(쓰러질 때 등)이 시작되면 그걸 덮어쓰지 않는다.
+const HITSTOP_SCALE := 0.06
+static var _stop_token := 0
+
+static func hitstop(node: Node, seconds: float) -> void:
+	if seconds <= 0.0 or not node.is_inside_tree():
+		return
+	# 이미 더 느린 화면이면(다른 연출 중) 건드리지 않는다
+	if Engine.time_scale < HITSTOP_SCALE - 0.001:
+		return
+	if Engine.time_scale > HITSTOP_SCALE + 0.001 and Engine.time_scale < 0.999:
+		return
+	_stop_token += 1
+	var my := _stop_token
+	Engine.time_scale = HITSTOP_SCALE
+	await node.get_tree().create_timer(seconds, true, false, true).timeout
+	if my == _stop_token and is_equal_approx(Engine.time_scale, HITSTOP_SCALE):
+		Engine.time_scale = 1.0
+
+
 static func _burst(world: Node, pos: Vector3, amount: int, life: float) -> CPUParticles3D:
 	var p := CPUParticles3D.new()
 	p.one_shot = true

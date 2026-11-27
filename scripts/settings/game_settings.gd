@@ -58,6 +58,8 @@ static var fov := FOV_DEFAULT
 static var quality := "high"
 static var fullscreen := false
 static var show_fps := false
+## 휘두를 때 남는 빛 자취(검기). 끄면 자취 없이 칼만 보인다 (맞는 순간 멈춤은 그대로)
+static var trails := true
 ## 행동 이름 -> ["key:87", "mouse:1", ...]. 비어 있으면 기본 키.
 static var bindings := {}
 
@@ -81,6 +83,7 @@ static func ensure_loaded() -> void:
 	quality = q if QUALITY.has(q) else "high"
 	fullscreen = bool(cfg.get_value("graphics", "fullscreen", false))
 	show_fps = bool(cfg.get_value("graphics", "show_fps", false))
+	trails = bool(cfg.get_value("graphics", "trails", true))
 	bindings = {}
 	if cfg.has_section("keys"):
 		for a in cfg.get_section_keys("keys"):
@@ -103,6 +106,7 @@ static func save() -> void:
 	cfg.set_value("graphics", "quality", quality)
 	cfg.set_value("graphics", "fullscreen", fullscreen)
 	cfg.set_value("graphics", "show_fps", show_fps)
+	cfg.set_value("graphics", "trails", trails)
 	if cfg.has_section("keys"):
 		cfg.erase_section("keys")
 	for a in bindings:

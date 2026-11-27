@@ -68,6 +68,11 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/new_weapons_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee newweapons.log
           grep -q "NEWWEAPONS => OK" newweapons.log
 
+      - name: "자동 점검 (빛 자취와 맞는 순간 멈춤)"
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/trail_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee trails.log
+          grep -q "TRAILS => OK" trails.log
+
       - name: Windows 실행 파일 만들기
         run: |
           mkdir -p build/windows
