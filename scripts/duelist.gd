@@ -1526,10 +1526,11 @@ func _think_vertical() -> bool:
 		_start_attack("slash1")
 		stats["stomp"] = stats.get("stomp", 0) + 1
 		return true
-	# 높은 곳에서 아래 상대에게 낙하 찍기
+	# 높은 곳에서 아래 상대에게 낙하 찍기. 이미 내려가려고 길을 찾는 중(approach)이면 망설이지 않고 뛰어내린다
+	# (빙 돌아 계단으로 내려가는 것보다 박진감 있고, 주사위가 몇 번 빗나가 그냥 걸어 내려가는 일이 없다)
 	var plunge_cost: float = _mv("plunge").cost
 	if _dy < -1.8 and _dy > -9.0 and _dist < 6.5 and is_on_floor() and stamina > plunge_cost \
-			and randf() < 0.6 and _clear_line_to_target():
+			and (state == "approach" or randf() < 0.6) and _clear_line_to_target():
 		_leap_plunge()
 		return true
 	# 아이템 다툼
