@@ -39,10 +39,11 @@ func setup(pillar_id: String, center: Vector3, s: Vector3, mats: Dictionary) -> 
 	var h := s.y
 	LowPoly.part(_visual, LowPoly.box(Vector3(s.x, h, s.z)), mats.sand, Vector3(0, h * 0.5, 0), Vector3.ZERO, 0.03, 11)
 	LowPoly.part(_visual, LowPoly.box(Vector3(s.x + 0.25, 0.4, s.z + 0.25)), mats.stone2, Vector3(0, 0.2, 0))
-	LowPoly.part(_visual, LowPoly.box(Vector3(s.x + 0.2, 0.3, s.z + 0.2)), mats.coral, Vector3(0, h - 0.15, 0))
+	# 꼭대기 띠는 흔들린(jitter) 몸통 윗면보다 조금 높게: 같은 높이면 화면을 돌릴 때 반짝인다
+	LowPoly.part(_visual, LowPoly.box(Vector3(s.x + 0.2, 0.3, s.z + 0.2)), mats.coral, Vector3(0, h - 0.11, 0))
 	# 금 간 띠: 부서지는 기둥이라는 표시 (청록 대신 모래색 + 갈라진 무늬)
 	for y in [1.3, 2.6]:
-		LowPoly.part(_visual, LowPoly.box(Vector3(s.x + 0.04, 0.12, s.z + 0.04)), mats.navy, Vector3(0, y, 0))
+		LowPoly.part(_visual, LowPoly.box(Vector3(s.x + 0.1, 0.12, s.z + 0.1)), mats.navy, Vector3(0, y, 0))
 	# 손잡이 (타고 오를 수 있다)
 	for f in 4:
 		var d := Vector3(cos(f * PI * 0.5), 0, sin(f * PI * 0.5))

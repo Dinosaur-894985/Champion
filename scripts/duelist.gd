@@ -107,6 +107,8 @@ var _face := Vector3.ZERO       # 길을 따라갈 때 바라볼 방향 (ZERO �
 var _climb_top := 0.0
 var _climb_dir := Vector3.ZERO
 var _stuck_t := 0.0
+var _flying := false           # 바람 발판에 날려 가는 중 (궤적을 그대로 따른다)
+var _fly_grace := 0.0
 var _stuck_pos := Vector3.ZERO
 var _ray := PhysicsRayQueryParameters3D.new()
 var _dj_pending := false        # 점프 꼭대기에서 이중 점프
@@ -135,7 +137,7 @@ func _ready() -> void:
 	# 기술 능력치가 높을수록 상대 공격 방향을 잘 읽는다
 	read_skill = clampf(0.45 + 0.05 * (float(build.stats.tec) - 5.0), 0.25, 0.8)
 	collision_layer = 2
-	collision_mask = 1   # 나무 상자(층 4)와는 부딪히지 않고, 가까이 가면 밀어낸다 (길찾기가 막히지 않게)
+	collision_mask = 1
 	var col := CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
 	cap.radius = 0.38
@@ -161,7 +163,6 @@ func _ready() -> void:
 		.add("plunge", _plunge_enter, _plunge_update) \
 		.add("hang", _hang_enter, _hang_update) \
 		.add("zip", _zip_enter, _zip_update) \
-		.add("kick", _kick_enter, _kick_update, _kick_exit) \
 		.add("dead")
 	_ray.collision_mask = 1
 	_build_rope()
@@ -219,7 +220,6 @@ func _physics_process(delta: float) -> void:
 	if active and not dead:
 		add_gauge(Weapons.GAUGE.regen * delta)
 	_alert = maxf(_alert - delta, 0.0)
-	_kick_cd -= delta
 	_move_cd -= delta
 	_iframes = maxf(_iframes - delta, 0.0)
 	_thrown_t = maxf(_thrown_t - delta, 0.0)
@@ -249,13 +249,16 @@ func _physics_process(delta: float) -> void:
 
 	# 던져지는 중에는 밀린 힘이 천천히 줄어든다 (멀리 날아간다)
 	_push = _push.lerp(Vector3.ZERO, clampf(delta * (1.6 if _thrown_t > 0.0 else 6.0), 0, 1))
+	_fly_grace = maxf(_fly_grace - delta, 0.0)
+	if _flying and is_on_floor() and _fly_grace <= 0.0:
+		_flying = false
 	var mv := _move + _push
-	velocity.x = lerpf(velocity.x, mv.x, clampf(delta * 12.0, 0, 1))
-	velocity.z = lerpf(velocity.z, mv.z, clampf(delta * 12.0, 0, 1))
+	if not _flying:
+		velocity.x = lerpf(velocity.x, mv.x, clampf(delta * 12.0, 0, 1))
+		velocity.z = lerpf(velocity.z, mv.z, clampf(delta * 12.0, 0, 1))
 	var pre_speed := Vector2(velocity.x, velocity.z).length()
 	_fall_v = velocity.y
 	move_and_slide()
-	_shove_crates()
 	_footsteps(delta)
 	_vertical_tick(delta)
 	if _thrown_t > 0.0 and is_on_wall() and pre_speed >= float(MoveSet.THROW.wall_slam_speed):
@@ -877,6 +880,9 @@ func _nav_move(delta: float) -> Vector3:
 	_repath_t -= delta
 	if _riding_lift() and _path_i < _path.size() and _path[_path_i].kind == "lift":
 		_repath_t = maxf(_repath_t, 0.3)   # 발판을 타고 있는 동안에는 길을 다시 찾지 않는다
+	if _flying:
+		_repath_t = maxf(_repath_t, 0.3)   # 바람 발판으로 날아가는 중에도
+		_stuck_t = 0.0
 	if _repath_t <= 0.0 or _path_i >= _path.size():
 		_repath_t = 0.6
 		_path = arena.find_path(global_position, _nav_goal(), traits.get("wall_climb", false))
@@ -1520,10 +1526,11 @@ func _think_vertical() -> bool:
 		_start_attack("slash1")
 		stats["stomp"] = stats.get("stomp", 0) + 1
 		return true
-	# 높은 곳에서 아래 상대에게 낙하 찍기
+	# 높은 곳에서 아래 상대에게 낙하 찍기. 이미 내려가려고 길을 찾는 중(approach)이면 망설이지 않고 뛰어내린다
+	# (빙 돌아 계단으로 내려가는 것보다 박진감 있고, 주사위가 몇 번 빗나가 그냥 걸어 내려가는 일이 없다)
 	var plunge_cost: float = _mv("plunge").cost
 	if _dy < -1.8 and _dy > -9.0 and _dist < 6.5 and is_on_floor() and stamina > plunge_cost \
-			and randf() < 0.6 and _clear_line_to_target():
+			and (state == "approach" or randf() < 0.6) and _clear_line_to_target():
 		_leap_plunge()
 		return true
 	# 아이템 다툼
@@ -1712,6 +1719,8 @@ func _plunge_impact() -> void:
 # --- 난간 매달리기 ---
 
 func _try_hang() -> bool:
+	if _flying:
+		return false
 	if _hang_cd > 0.0 or velocity.y > -1.0 or is_on_floor():
 		return false
 	if not (state in ["idle", "approach", "circle", "recover"] or (state == "stagger" and _state_t > 0.2)):
@@ -1844,6 +1853,18 @@ func _nav_special(wp: Dictionary, dir: Vector3, hd: float) -> Variant:
 				return Vector3(noff.x, 0, noff.y).normalized() * 3.0
 			return dir * _speed() if noff.length() > 3.2 else Vector3.ZERO
 	match wp.kind:
+		"launch":
+			# 바람 발판: 발판 한가운데로 걸어 올라가면 발판이 날려 보낸다
+			if _flying:
+				return Vector3.ZERO
+			var pad: LaunchPad = arena.pads[wp.ref]
+			var to_pad := pad.global_position - global_position
+			to_pad.y = 0
+			_stuck_t = 0.0
+			if to_pad.length() > 6.0:
+				_repath_t = 0.0   # 발판에서 멀어졌다 (밀려났다 등): 길을 다시 찾는다
+			_face = to_pad.normalized() if to_pad.length() > 0.1 else _face
+			return to_pad.normalized() * _speed() if to_pad.length() > 0.1 else Vector3.ZERO
 		"lift":
 			var lift: ArenaLift = arena.lifts[wp.ref]
 			var c := lift.center()
@@ -2065,12 +2086,9 @@ func _special_strike(data: Dictionary) -> void:
 
 
 
-# ---------------- 자유로운 움직임: 달려들기, 미끄러지기, 뛰어 베기, 상자 차기, 기둥 쓰러뜨리기 ----------------
+# ---------------- 자유로운 움직임: 달려들기, 미끄러지기, 뛰어 베기, 기둥 쓰러뜨리기 ----------------
 # 플레이어와 같은 동작 표(MoveSet: run_thrust, sweep, air_slash)를 쓴다.
 
-var _kick_crate: ArenaCrate = null
-var _kick_cd := 0.0
-var _kick_hit := false
 var _move_cd := 0.0
 
 
@@ -2078,14 +2096,6 @@ var _move_cd := 0.0
 func _think_movement() -> bool:
 	if not is_on_floor() or _move_cd > 0.0:
 		return false
-	# 상자가 가까이 있고 상대가 적당히 떨어져 있으면 차서 날린다
-	if _kick_cd <= 0.0 and _dist > 3.5 and _dist < 13.0 and randf() < 0.35 * (0.5 + aggression):
-		var c := _crate_to_kick()
-		if c != null:
-			_kick_crate = c
-			_kick_cd = 7.0
-			sm.go("kick")
-			return true
 	if stamina < 35.0 or target.sm.state == "iron":
 		return false
 	var r := randf() * (1.2 - aggression * 0.4)
@@ -2113,85 +2123,19 @@ func _think_movement() -> bool:
 	return false
 
 
-## 찰 만한 상자: 내 가까이에 있고, 상대 쪽으로 차면 가는 길이 트여 있는 것
-func _crate_to_kick() -> ArenaCrate:
-	if arena == null:
-		return null
-	var best: ArenaCrate = null
-	var best_d := 4.5
-	for c in arena.crates:
-		var cr := c as ArenaCrate
-		if cr == null or not cr.can_pick():
-			continue
-		var to_c := cr.global_position - global_position
-		if absf(to_c.y) > 0.8:
-			continue
-		to_c.y = 0
-		var d := to_c.length()
-		var c_to_t := target.global_position - cr.global_position
-		c_to_t.y = 0
-		var ct := c_to_t.length()
-		if d < best_d and ct > 3.0 and ct < 14.0 and absf(target.global_position.y - cr.global_position.y) < 2.0:
-			_ray.from = cr.global_position + Vector3.UP * 0.2
-			_ray.to = target.global_position + Vector3.UP * 0.9
-			_ray.exclude = [get_rid(), target.get_rid(), cr.get_rid()]
-			if get_world_3d().direct_space_state.intersect_ray(_ray).is_empty():
-				best = cr
-				best_d = d
-	return best
-
-
-func _kick_enter(_d: Dictionary) -> void:
-	_kick_hit = false
-	stats["crate_kick"] = stats.get("crate_kick", 0) + 1
-
-
-func _kick_update(_delta: float) -> void:
-	if _kick_crate == null or not is_instance_valid(_kick_crate) or not _kick_crate.can_pick() or _state_t > 3.0 \
-			or absf(_kick_crate.global_position.y - global_position.y) > 1.0 \
-			or _kick_crate.global_position.distance_to(global_position) > 6.0:
-		_kick_crate = null
+## 바람 발판에 날려 간다 (LaunchPad 가 부른다)
+func launch(vel: Vector3) -> void:
+	if state in ["climb", "hang", "zip", "dash", "block"]:
 		_back_to_neutral()
-		return
-	var c_to_t := target.global_position - _kick_crate.global_position
-	c_to_t.y = 0
-	var aim := c_to_t.normalized()
-	# 상자 뒤 (상대 반대쪽)에 선다
-	var stand := _kick_crate.global_position - aim * 0.95
-	var to_stand := stand - global_position
-	to_stand.y = 0
-	_face = aim
-	if not _kick_hit:
-		if to_stand.length() > 0.35:
-			_move = to_stand.normalized() * _speed() * 1.5
-			_face = to_stand.normalized()
-			sm.time = 0.0 if to_stand.length() > 0.8 else sm.time
-			return
-		_kick_hit = true
-		sm.time = 0.0
-		rig.set_pose(MoveSet.BODY_POSES.kick, 14.0)
-		rig.glow(Color(1.0, 0.55, 0.1), 2.0)
-		_play("warn_light")
-		return
-	if _state_t >= 0.28 and _kick_crate.can_kick():
-		var to_t := target.global_position + Vector3.UP * 0.9 - _kick_crate.global_position
-		var flat := Vector3(to_t.x, 0, to_t.z)
-		var speed := 15.0
-		var t := maxf(flat.length() / speed, 0.15)
-		var vy := (to_t.y + 0.5 * _gravity * t * t) / t
-		_kick_crate.kick(flat.normalized() * speed + Vector3.UP * vy, self)
-		rig.dash_pulse(Vector3(0, 0, -1))
-		_play(_wsnd("swing_heavy"))
-		combat_event.emit("상대가 상자를 찼다!", Color(1.0, 0.7, 0.4))
-		_kick_crate = null
-		_back_to_neutral()
+	velocity = vel
+	_push = Vector3.ZERO
+	_flying = true
+	_fly_grace = 0.2
+	vkit.reset_fall()
+	stats["launch"] = stats.get("launch", 0) + 1
 
 
-func _kick_exit() -> void:
-	rig.glow(rig.blade_mat.emission, 0.0)
-
-
-## 상자가 날아온다 (ArenaCrate 가 알려 준다): 막거나 옆으로 피한다
+## 수리검이 날아온다 (Projectile 이 알려 준다): 막거나 옆으로 피한다
 func on_incoming_object(obj: Node3D) -> void:
 	if not active or dead:
 		return
@@ -2227,29 +2171,6 @@ func on_falling_hazard(axis: Vector3, from: Vector3) -> void:
 		side = 1.0
 	stats["dodge_pillar"] = stats.get("dodge_pillar", 0) + 1
 	sm.go("dash", {"vec": axis * side})
-
-
-## 걸어가다 닿은 상자는 옆으로 밀어낸다 (달려들 때는 차 버린다)
-func _shove_crates() -> void:
-	if arena == null:
-		return
-	var hv := Vector3(velocity.x, 0, velocity.z)
-	for c in arena.crates:
-		var cr := c as ArenaCrate
-		if cr == null or not cr.visible or cr.is_held():
-			continue
-		var to := cr.global_position - global_position
-		if absf(to.y - 0.45) > 0.9:
-			continue
-		to.y = 0
-		var d := to.length()
-		if d > 0.85 or d < 0.01:
-			continue
-		var away := to / d
-		if hv.length() > 6.0 and cr.can_kick() and hv.normalized().dot(away) > 0.5:
-			cr.kick(away * (hv.length() * 1.4 + 2.0) + Vector3.UP * 2.5, self)
-		else:
-			cr.nudge(away * maxf(hv.length(), 2.0) * 1.5 + hv * 0.5)
 
 
 # ---------------- 새 무기: 발차기 자세, 수리검 던지기, 여러 번 치는 필살기 ----------------

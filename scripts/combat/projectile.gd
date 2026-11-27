@@ -3,7 +3,7 @@ extends Node3D
 ## 날아가는 수리검. 플레이어와 AI 가 같이 쓴다.
 ## 매 프레임 지나간 길을 광선으로 검사해서, 처음 닿은 것에 맞는다.
 ##   사람(플레이어/AI)  : 근접 공격과 같은 판정 (막기, 튕겨내기, 피하기가 그대로 된다)
-##   상자/기둥/허수아비 : take_hit
+##   기둥/허수아비 : take_hit
 ##   벽과 바닥          : 꽂혀서 잠깐 남았다 사라진다
 ## 막히면 튕겨 나가 떨어진다. 피하면 그대로 지나간다.
 
@@ -159,8 +159,6 @@ func _strike(body: Node3D, dir: Vector3) -> void:
 			target = null
 			velocity = (-dir * 3.0 + Vector3.UP * 3.5 + Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)) * 1.5)
 			_life = 1.2
-		"crate":
-			_stick(-dir)
 		_:
 			Fx.impact(get_parent(), global_position, dir + Vector3.UP * 0.2, Color(0.75, 0.1, 0.08), 8)
 			Audio.play("shuriken_hit", global_position)
