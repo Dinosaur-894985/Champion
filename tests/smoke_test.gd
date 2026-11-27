@@ -715,6 +715,10 @@ func _skills_iron(player: Player) -> void:
 	# 등을 돌리고 있어도 철벽은 막아야 한다
 	player.rotation.y = atan2(to_ai.x, to_ai.z)
 	if ai.state == "windup" and player.sm.state == "free" and to_ai.length() < 3.2:
+		# 이 점검은 철벽이 막는지만 본다. 앞선 시도가 빗나갔으면(AI 가 철벽이 끝나길 기다렸다 치는 등,
+		# 컴퓨터 속도에 따라 타이밍이 달라짐) 쿨타임을 비워 다시 켤 수 있게 한다.
+		player.skills._cd["iron_guard"] = 0.0
+		player.stamina = player.max_stamina
 		player.use_skill_slot(0)
 	if player.sm.state == "iron":
 		_shot_once("s4_iron")
