@@ -18,7 +18,7 @@ const SAVE_PATH := "user://build.cfg"
 const STATS := {
 	"str": ["힘", "공격력, 막기 깨는 힘"],
 	"vit": ["체력", "최대 체력, 덜 휘청임"],
-	"agi": ["민첩", "이동 속도, 대시 거리"],
+	"agi": ["민첩", "이동 속도, 대시 거리, 대시 기력 절약"],
 	"tec": ["기술", "공격 속도, 튕겨내기 타이밍 여유"],
 	"end": ["지구력", "기력 최대치와 회복 속도"],
 }
@@ -219,14 +219,25 @@ func duplicate_build() -> CharacterBuild:
 
 # ---------------- 능력치가 실제로 바꾸는 값 ----------------
 # 5 가 기준(지금까지의 게임과 같은 값). 1 은 약하고 10 은 강하다.
+# 8 을 넘는 점수는 효과가 절반이다 (9 는 8.5, 10 은 9 만큼) → 한 곳에 몰아 찍기보다 섞는 편이 낫다.
+# 점수 1점의 값이 능력치마다 비슷하도록 맞춰 두었다 (자동 대결로 확인: tools/balance_sim.sh).
+
+const SOFT_CAP := 8.0
+
+
+## 실제로 쓰이는 능력치 값 (8 넘으면 절반만 오른다)
+func effective(stat: String) -> float:
+	var v := float(stats[stat])
+	return v if v <= SOFT_CAP else SOFT_CAP + (v - SOFT_CAP) * 0.5
+
 
 func _d(stat: String) -> float:
-	return float(stats[stat]) - 5.0
+	return effective(stat) - 5.0
 
 
-## 힘: 공격 피해 배율 (1: 0.8배, 5: 1배, 10: 1.25배)
+## 힘: 공격 피해 배율 (1: 0.72배, 5: 1배, 10: 1.28배)
 func damage_mult() -> float:
-	return 1.0 + 0.05 * _d("str")
+	return 1.0 + 0.07 * _d("str")
 
 
 ## 힘: 상대가 내 공격을 막을 때 줄어드는 기력 배율
@@ -234,17 +245,17 @@ func guard_pressure() -> float:
 	return 1.0 + 0.08 * _d("str")
 
 
-## 체력: 최대 체력 (1: 72, 5: 100, 10: 135)
+## 체력: 최대 체력 (1: 80, 5: 100, 10: 120)
 func max_hp() -> int:
-	return int(100 + 7 * _d("vit"))
+	return int(100 + 5 * _d("vit"))
 
 
 ## 체력: 맞았을 때 휘청이는 시간 배율 (높을수록 덜 휘청임)
 func stun_mult() -> float:
-	return 1.0 - 0.045 * _d("vit")
+	return 1.0 - 0.035 * _d("vit")
 
 
-## 민첩: 이동 속도 배율 (1: 0.84, 10: 1.2)
+## 민첩: 이동 속도 배율 (1: 0.84, 10: 1.16)
 func speed_mult() -> float:
 	return 1.0 + 0.04 * _d("agi")
 
@@ -254,17 +265,22 @@ func dash_mult() -> float:
 	return 1.0 + 0.06 * _d("agi")
 
 
-## 기술: 공격 동작 시간 배율 (낮을수록 빠름. 1: 1.14, 10: 0.83)
+## 민첩: 대시(피하기)에 드는 기력 배율 (1: 1.28, 5: 1, 10: 0.72) → 민첩이 높으면 더 자주 피한다
+func dash_cost_mult() -> float:
+	return 1.0 - 0.07 * _d("agi")
+
+
+## 기술: 공격 동작 시간 배율 (낮을수록 빠름. 1: 1.14, 10: 0.86)
 func attack_time_mult() -> float:
 	return 1.0 - 0.034 * _d("tec")
 
 
-## 기술: 튕겨내기 타이밍 여유 (초. 1: 0.14, 5: 0.2, 10: 0.275)
+## 기술: 튕겨내기 타이밍 여유 (초. 1: 0.14, 5: 0.2, 10: 0.26)
 func parry_window() -> float:
 	return 0.2 + 0.015 * _d("tec")
 
 
-## 지구력: 기력 최대치 (1: 60, 5: 100, 10: 150)
+## 지구력: 기력 최대치 (1: 60, 5: 100, 10: 140)
 func max_stamina() -> float:
 	return 100.0 + 10.0 * _d("end")
 

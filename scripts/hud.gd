@@ -26,6 +26,7 @@ var _stamina_bar: ProgressBar
 var _gauge_bar: ProgressBar
 var _gauge_label: Label
 var _gauge_ready := false
+var _ammo_label: Label
 var _enemy_gauge: ProgressBar
 var _hp_bar: ProgressBar
 var _hp_box: Control
@@ -50,7 +51,7 @@ var _menu_kind := ""
 
 
 ## 조작법. {행동} 자리에는 설정에서 고른 키 이름이 들어간다 (scripts/settings/game_settings.gd)
-const HELP_TEXT := "{move}  이동    {jump}  점프\n{sprint}  달리기 (누르고 있으면 점점 빨라짐)\n{move_left} / {move_right} / {move_back} 두 번 빠르게  그쪽으로 피하기\n{crouch}  앉기 — 달리다 누르면 슬라이딩 (슬라이딩 중 {jump}: 점프)\n벽을 보고 {move_forward} + {jump}  벽 타고 오르기 / 벽 옆을 달리다 {jump}  벽 달리기\n{attack} 연타  연속기 — 이어 누를 때 마우스를 위/아래로 움직이면 갈래가 바뀜\n    옆 네 번: 회전 베기 / 위로 이어: 쪼개기 / 아래로 이어: 꿰뚫기\n달리며 {attack}  달려 찌르기 / 슬라이딩 중 {attack}  다리 베기(넘어뜨림)\n벽을 달리다(벽 차고 뛴 직후) {attack}  벽 차고 베기\n{attack} 길게  차지 베기    {heavy_attack}  내려찍기 (막기를 깨뜨림)\n수리검: {heavy_attack} 던지기 (끝없이) · {attack} 길게 놓으면 세 장 · 맨몸: 주먹과 발차기\n{block}  막기 — 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\n{grab}  잡아 던지기 · 금 간 돌기둥을 쳐서 상대 쪽으로 쓰러뜨리기\n바람 발판을 밟으면 높이 날아오름 → 날아가며 {attack}하면 낙하 찍기\n휘두르기 전 {block}/{grab}/{sprint}  속임수 · 아슬하게 피한 직후 {attack}  반격\n{skill1} / {skill2}  특수 스킬    {special}  무기 필살기    Esc  메뉴"
+const HELP_TEXT := "{move}  이동    {jump}  점프\n{sprint}  달리기 (누르고 있으면 점점 빨라짐)\n{move_left} / {move_right} / {move_back} 두 번 빠르게  그쪽으로 피하기\n{crouch}  앉기 — 달리다 누르면 슬라이딩 (슬라이딩 중 {jump}: 점프)\n벽을 보고 {move_forward} + {jump}  벽 타고 오르기 / 벽 옆을 달리다 {jump}  벽 달리기\n{attack} 연타  연속기 — 이어 누를 때 마우스를 위/아래로 움직이면 갈래가 바뀜\n    옆 네 번: 회전 베기 / 위로 이어: 쪼개기 / 아래로 이어: 꿰뚫기\n달리며 {attack}  달려 찌르기 / 슬라이딩 중 {attack}  다리 베기(넘어뜨림)\n벽을 달리다(벽 차고 뛴 직후) {attack}  벽 차고 베기\n{attack} 길게  차지 베기    {heavy_attack}  내려찍기 (막기를 깨뜨림)\n수리검: {heavy_attack} 던지기 (6장, 떨어진 것을 지나가며 주움 · 공중에서도 던짐) · {attack} 길게 놓으면 세 장 · 맨몸: 주먹과 발차기\n{block}  막기 — 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\n{grab}  잡아 던지기 · 금 간 돌기둥을 쳐서 상대 쪽으로 쓰러뜨리기\n바람 발판을 밟으면 높이 날아오름 → 날아가며 {attack}하면 낙하 찍기\n휘두르기 전 {block}/{grab}/{sprint}  속임수 · 아슬하게 피한 직후 {attack}  반격\n{skill1} / {skill2}  특수 스킬    {special}  무기 필살기    Esc  메뉴"
 const HELP2_TEXT := "높은 곳에서 {attack} (아래를 보며)  낙하 찍기\n공중에서 {attack}  공중 베기\n난간에 매달림  {jump} 올라서기 / {attack} 뛰어올라 베기 / {move_back} 놓기\n공중에서 줄에 닿으면  짚라인 ({jump} 뛰어내리기)\n강한 공격으로 상대를 낭떠러지로 밀어 떨어뜨리기"
 
 
@@ -147,6 +148,13 @@ func _ready() -> void:
 	_gauge_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	_gauge_label.add_theme_constant_override("outline_size", 4)
 	_root.add_child(_gauge_label)
+	# 수리검 수 (던지는 무기일 때만 보인다)
+	_ammo_label = _small_label("")
+	_ammo_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_ammo_label.position = Vector2(-160, -72)
+	_ammo_label.size = Vector2(200, 20)
+	_ammo_label.add_theme_constant_override("outline_size", 4)
+	_root.add_child(_ammo_label)
 
 	# 내 체력 (왼쪽 아래)
 	_hp_box = Control.new()
@@ -499,6 +507,12 @@ func set_gauge(value: float, max_value: float) -> void:
 		_gauge_label.text = ("V  %s  준비!" if _gauge_ready else "필살기  %s") % sp.name
 
 
+func set_ammo(value: int, max_value: int) -> void:
+	_ammo_label.visible = max_value > 0
+	_ammo_label.text = "수리검 %s" % ("●".repeat(value) + "○".repeat(maxi(max_value - value, 0)))
+	_ammo_label.modulate = Color(1, 1, 1) if value > 0 else Color(1.0, 0.5, 0.4)
+
+
 func set_stamina(value: float, max_value: float) -> void:
 	_stamina_bar.max_value = max_value
 	_stamina_bar.value = value
@@ -552,6 +566,8 @@ func set_player(p: Player) -> void:
 	_gauge_bar.value = p.gauge
 	set_gauge(p.gauge, Weapons.GAUGE_MAX)
 	p.gauge_changed.connect(set_gauge)
+	p.ammo_changed.connect(set_ammo)
+	set_ammo(p.ammo, p.ammo_max)
 	set_player_slots()
 
 

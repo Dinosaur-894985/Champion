@@ -10,6 +10,7 @@ extends CharacterBody3D
 ##   몸 움직임   : BodyRig — 아래 몸/위 몸/흔들림 세 겹으로 자세를 만든다
 ##   동작 수치   : MoveSet — 플레이어와 같은 표를 쓴다
 
+signal ammo_changed(value: int, max_value: int)
 signal hp_changed(value: int, max_value: int)
 signal combat_event(text: String, color: Color)
 signal died
@@ -58,6 +59,9 @@ var skills: SkillKit
 var weapon := "sword"
 ## 필살기 게이지. 다 차면 좋은 때를 골라 필살기를 쓴다.
 var gauge := 0.0
+var ammo := 0                     # 들고 있는 수리검 수 (던지는 무기만)
+var ammo_max := 0
+var _ammo_t := 0.0
 signal gauge_changed(value: float, max_value: float)
 
 var max_hp := MAX_HP
@@ -132,6 +136,8 @@ func _ready() -> void:
 	stamina = max_stamina
 	traits = {"wall_climb": build.has("wall")}
 	weapon = Weapons.valid(build.weapon)
+	ammo_max = Weapons.ammo_max(weapon)
+	ammo = ammo_max
 	skills = SkillKit.new(self, build)
 	vkit = VerticalKit.new(self)
 	# 기술 능력치가 높을수록 상대 공격 방향을 잘 읽는다
@@ -217,6 +223,7 @@ func _physics_process(delta: float) -> void:
 			_play("double_jump")
 	skills.tick(delta)
 	_regen(delta)
+	_ammo_tick(delta)
 	if active and not dead:
 		add_gauge(Weapons.GAUGE.regen * delta)
 	_alert = maxf(_alert - delta, 0.0)
@@ -349,13 +356,15 @@ func _think() -> void:
 		_combo_left = 0
 		_start_attack("thrust")
 		return
-	# 수리검: 멀리 있으면 던진다 (끝없이 나온다). 가끔 세 장 부채꼴
-	if Weapons.get_weapon(weapon).ai.has("throw") and _dist > 3.2 and _dist < 16.0 \
+	# 수리검: 멀리 있으면 던진다 (들고 있는 만큼). 가끔 세 장 부채꼴
+	if Weapons.get_weapon(weapon).ai.has("throw") and (ammo > 0 or ammo_max <= 0) and _dist > 3.2 and _dist < 16.0 \
 			and absf(_dy) < 2.5 and randf() < 0.55 * _style("throw") and _clear_line_to_target():
 		_combo_left = 0
 		_start_attack("heavy" if randf() < 0.75 else "charge")
 		return
 	if _think_movement():
+		return
+	if _chase_ranged():
 		return
 	var r := randf()
 	# 거리가 좀 벌어졌으면 가끔 차지 베기로 돌진
@@ -393,6 +402,18 @@ func _think() -> void:
 	else:
 		guard_dir = mind.guess_dir()
 		_enter_block()
+
+
+## 상대가 수리검을 들고 멀리 있다: 달려가 붙고, 가끔 앞으로 대시해 거리를 확 좁힌다
+func _chase_ranged() -> bool:
+	if target.ammo_max <= 0 or _dist < 5.0:
+		return false
+	if stamina > 45.0 and is_on_floor() and randf() < 0.3:
+		_dash_dir(1.0, 0.35)
+		return true
+	sm.go("approach")
+	_think_t = 0.15
+	return true
 
 
 func _can_react() -> bool:
@@ -550,7 +571,9 @@ func _neutral_update(delta: float) -> void:
 			_start_attack("grab")
 		return
 	if state == "approach":
-		_move = _dir * _speed() if _dist > 2.0 * _style("range") else Vector3.ZERO
+		# 멀면 달려간다 (도망치는 상대를 걸어서는 못 따라잡는다)
+		var spd := _speed() if _dist < 5.5 else maxf(_speed(), RUN_SPEED * build.speed_mult())
+		_move = _dir * spd if _dist > 2.0 * _style("range") else Vector3.ZERO
 	else:
 		var keep := (_dist - 2.6 * _style("range")) * 1.5
 		if stamina < 22.0:
@@ -560,6 +583,8 @@ func _neutral_update(delta: float) -> void:
 
 
 func _start_attack(kind: String) -> void:
+	if _mv(kind).has("projectile") and ammo_max > 0 and ammo <= 0:
+		kind = "slash1"   # 수리검이 떨어졌다: 손에 쥔 칼날로 벤다
 	if stamina < float(_mv(kind).cost) * 0.5:
 		_back_to_neutral()
 		return
@@ -734,7 +759,8 @@ func _strike_enter(_d: Dictionary) -> void:
 		# 수리검 던지기: 휘두르지 않고 날려 보낸다
 		_hit_done = true
 		var pr: Dictionary = data.projectile
-		_throw_projectiles(data, int(pr.count), float(pr.spread), float(pr.speed), float(pr.get("homing", 0.0)))
+		var n := use_ammo(int(pr.count))
+		_throw_projectiles(data, n, float(pr.spread) * float(n) / float(maxi(int(pr.count), 1)), float(pr.speed), float(pr.get("homing", 0.0)), -1, ammo_max > 0)
 
 
 func _strike_update(_delta: float) -> void:
@@ -801,7 +827,7 @@ func _block_update(_delta: float) -> void:
 
 ## back: 앞(+)/뒤(-) 비율, side: 옆 비율
 func _dash_dir(back: float, side_amt: float) -> void:
-	if stamina < DASH_COST * 0.5:
+	if stamina < DASH_COST * build.dash_cost_mult() * 0.5:
 		# 기력이 없어 대시를 못 한다: 대신 막는다
 		_enter_block()
 		return
@@ -814,7 +840,7 @@ func _dash_enter(d: Dictionary) -> void:
 	_push = v * 11.0 * build.dash_mult()
 	_iframes = DASH_IFRAMES
 	if v.length() > 0.5:
-		spend_stamina(DASH_COST)
+		spend_stamina(DASH_COST * build.dash_cost_mult())
 	_counter_ready = false
 	rig.set_pose(MoveSet.BODY_POSES.guard, 12.0)
 	rig.dash_pulse(global_transform.basis.inverse() * v)
@@ -2149,6 +2175,10 @@ func on_incoming_object(obj: Node3D) -> void:
 		# 수리검: 찌르기 막기(가운데)로 막거나 옆으로 피한다. 가끔은 못 본다
 		if r < 0.2:
 			return
+		# 멀리서 날아오면: 앞쪽 비스듬히 대시해 피하면서 거리를 좁힌다
+		if _dist > 5.5 and stamina > DASH_COST * 1.5 and r < 0.7:
+			_dash_dir(0.6, 0.8)
+			return
 		guard_dir = _read_dir(AttackDir.MID)
 	if r < block_chance + 0.15:
 		_face = Vector3.ZERO
@@ -2190,7 +2220,7 @@ func _kick_pose(data: Dictionary, amt: float) -> void:
 
 
 ## 수리검을 던진다. 상대가 움직이는 쪽을 조금 앞서 노린다 (다 앞서지는 않아서 옆으로 피할 수 있다)
-func _throw_projectiles(data: Dictionary, count: int, spread_deg: float, speed: float, homing: float, only := -1) -> void:
+func _throw_projectiles(data: Dictionary, count: int, spread_deg: float, speed: float, homing: float, only := -1, uses_ammo := false) -> void:
 	if target == null:
 		return
 	var fwd := -global_transform.basis.z
@@ -2203,6 +2233,9 @@ func _throw_projectiles(data: Dictionary, count: int, spread_deg: float, speed: 
 	var info := {"move": _attack, "damage": 0, "react": data.react, "guard": data.get("ai_guard", data.guard),
 			"pressure": build.guard_pressure() * Weapons.stat(weapon, "pressure"), "dir": data.get("dir", AttackDir.MID),
 			"push": float(data.get("push", 0.0)), "lift": float(data.get("lift", 2.0)), "power": vkit.powered()}
+	if uses_ammo:
+		info.ammo = true
+		info.falloff_w = weapon
 	for i in count:
 		if only >= 0 and i != only:
 			continue
@@ -2246,3 +2279,35 @@ func _special_multi(data: Dictionary) -> void:
 			rig.set_pose(data.body.strike if i % 2 == 0 else data.body.windup, 45.0)
 			_play(_wsnd("swing_heavy" if last else "swing"), -2.0)
 
+
+# ---------------- 던지는 무기의 수 (수리검) ----------------
+
+## 던질 수 있는 만큼 쓴다. 0 장이면 못 던진다. 돌려준 값만큼 던진다.
+func use_ammo(want: int) -> int:
+	if ammo_max <= 0:
+		return want
+	var n := mini(want, ammo)
+	ammo -= n
+	_ammo_t = 0.0
+	ammo_changed.emit(ammo, ammo_max)
+	return n
+
+
+## 떨어진 수리검을 주웠다 (Projectile 이 부른다). 가득 차 있으면 줍지 않는다.
+func pick_up_star() -> bool:
+	if dead or ammo_max <= 0 or ammo >= ammo_max:
+		return false
+	ammo += 1
+	ammo_changed.emit(ammo, ammo_max)
+	_play("shuriken_stick")
+	return true
+
+
+func _ammo_tick(delta: float) -> void:
+	if ammo_max <= 0 or ammo >= ammo_max:
+		return
+	_ammo_t += delta
+	if _ammo_t >= Weapons.stat_or(weapon, "ammo_regen", 4.0):
+		_ammo_t = 0.0
+		ammo += 1
+		ammo_changed.emit(ammo, ammo_max)

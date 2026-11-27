@@ -233,8 +233,8 @@ func _refresh() -> void:
 		var d: Dictionary = CharacterBuild.SKILLS[build.skills[i]]
 		keys.append("%s %s" % [slot_keys[i] if d.active else "자동", d.name])
 	_refresh_look()
-	_preview.text = "체력 %d   기력 %d   공격력 ×%.2f   이동 ×%.2f   공격 속도 ×%.2f   튕겨내기 여유 %.2f초\n%s" % [
-		build.max_hp(), int(build.max_stamina()), build.damage_mult(), build.speed_mult(),
+	_preview.text = "체력 %d   기력 %d   공격력 ×%.2f   이동 ×%.2f   대시 기력 ×%.2f   공격 속도 ×%.2f   튕겨내기 여유 %.2f초\n%s" % [
+		build.max_hp(), int(build.max_stamina()), build.damage_mult(), build.speed_mult(), build.dash_cost_mult(),
 		1.0 / build.attack_time_mult(), build.parry_window(),
 		"스킬:  " + "    ".join(keys) if not keys.is_empty() else "스킬 없음 (점수를 모두 능력치에)"]
 

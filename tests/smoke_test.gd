@@ -7,7 +7,9 @@ extends SceneTree
 ##     (자동 조종: 상대 칼이 빛나면 막고, 빈틈이 보이면 벤다)
 ##  5) 수싸움(only=rps): 가위바위보(공격>잡기>막기>공격), 방향 막기, 속임수, 던져서 벽꽝을 하나씩 확인한다.
 ## 자동 조종(bot=): good 방향을 읽고 막고 섞어 공격 / masher 옆 베기만 연타 / blocker 옆으로만 막고 버팀
-##                  grabber 잡기만 / dodger 옆으로 피하고 반격
+##                  grabber 잡기만 / dodger 옆으로 피하고 반격 / kiter 수리검 들고 뒤로 달리며 Q 만 던지기
+## 밸런스 측정: mystats=힘,체,민,기,지[,스킬+스킬] aistats=... (능력치 직접 정하기, 스킬 없으면 생략)
+##              maxf=프레임 (대결 제한 시간, 기본 1500). 끝에 RESULT 한 줄이 나온다. 여러 판은 tools/balance_sim.sh
 ## 실행: godot --headless --fixed-fps 60 -s res://tests/smoke_test.gd
 ## 사진 남기기: 끝에 -- shots=폴더   /  대결만: -- only=duel
 
@@ -30,6 +32,10 @@ var _ai_preset := "검객"
 var _my_preset := ""
 var _my_weapon := ""   # weapon=창 처럼 내 무기 (sword/greatsword/daggers/spear)
 var _ai_weapon := ""   # aiweapon=... AI 무기
+var _mystats := ""
+var _aistats := ""
+var _maxf := 1500
+var _kite_t := 0
 var _trace := false   # trace=1: 대결 중 AI 상태 변화와 결과를 한 줄씩 출력
 
 
@@ -54,6 +60,12 @@ func _initialize() -> void:
 			_ai_weapon = a.substr(9)
 		elif a.begins_with("linger="):
 			_linger = int(a.substr(7))
+		elif a.begins_with("mystats="):
+			_mystats = a.substr(8)
+		elif a.begins_with("aistats="):
+			_aistats = a.substr(8)
+		elif a.begins_with("maxf="):
+			_maxf = int(a.substr(5))
 		elif a == "trace=1":
 			_trace = true
 	seed(seed_value)
@@ -67,6 +79,12 @@ func _initialize() -> void:
 	if _ai_weapon != "":
 		Game.current_opponent = CharacterBuild.preset(_ai_preset)
 		Game.current_opponent.weapon = _ai_weapon
+	if _mystats != "":
+		_apply_stats(Game.test_player_build, _mystats)
+	if _aistats != "":
+		if Game.current_opponent == null:
+			Game.current_opponent = CharacterBuild.preset(_ai_preset)
+		_apply_stats(Game.current_opponent, _aistats)
 	_check_build_rules()
 	_check_weapon_table()
 	if _only == "duel":
@@ -85,6 +103,13 @@ func _initialize() -> void:
 		Game.next_mode = "practice"
 		_game = GAME.instantiate()
 		root.add_child(_game)
+
+
+func _apply_stats(b: CharacterBuild, spec: String) -> void:
+	var parts := spec.split(",")
+	for i in 5:
+		b.stats[CharacterBuild.STAT_ORDER[i]] = int(parts[i])
+	b.skills = [] if parts.size() <= 5 or parts[5] == "" else Array(parts[5].split("+"))
 
 
 func _start_duel() -> void:
@@ -346,7 +371,7 @@ func _duel_step() -> void:
 			player.sm.changed.connect(func(_a, b): print("  %4d   me %s %s" % [_frame, b, player._move]))
 	if _frame == 150:
 		_shot("d1_face")
-	if not is_instance_valid(ai) or ai.dead or player.dead or _frame > 1500:
+	if not is_instance_valid(ai) or ai.dead or player.dead or _frame > _maxf:
 		# 영상용: 끝난 뒤 승리/패배 음악까지 담으려고 조금 더 기다린다 (-- linger=프레임)
 		if _linger > 0:
 			_linger -= 1
@@ -395,6 +420,19 @@ func _autopilot(player: Player, ai: Duelist) -> void:
 
 	if _bot == "dodger":
 		_dodger(player, ai, dist)
+		return
+	if _bot == "kiter":
+		# 수리검 들고 뒤로 물러나며 Q 만 던진다
+		Input.action_release("move_forward")
+		if dist < 9.0:
+			Input.action_press("move_back")
+			Input.action_press("sprint")
+		else:
+			Input.action_release("move_back")
+			Input.action_release("sprint")
+		_kite_t += 1
+		if _kite_t % 8 == 0 and player.sm.state == "free":
+			player._request_attack("heavy")
 		return
 	if _bot == "masher":
 		if dist > 2.0:
@@ -504,6 +542,7 @@ func _finish_duel(player: Player, ai: Duelist) -> void:
 	Input.action_release("move_forward")
 	_shot("d9_end")
 	var ai_hp: int = ai.hp if is_instance_valid(ai) else 0
+	print("RESULT win=%s me_hp=%d/%d ai_hp=%d/%d frames=%d" % ["me" if ai_hp <= 0 else ("ai" if player.hp <= 0 else "time"), player.hp, player.max_hp, ai_hp, ai.max_hp if is_instance_valid(ai) else 0, _frame])
 	print("DUEL frames=%d min_dist=%.2f player_hp=%d ai_hp=%d results=%s" % [
 		_frame, _min_dist, player.hp, ai_hp, _results])
 	if _min_dist > 3.0:
