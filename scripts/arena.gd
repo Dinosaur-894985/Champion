@@ -1,7 +1,7 @@
 class_name Arena
 extends Node3D
 ## 경기장: 하늘 위에 떠 있는 3층짜리 돌 경기장.
-##   1층 (바닥 0m)   : 가운데 결투 원, 낮은 받침돌, 상자
+##   1층 (바닥 0m)   : 가운데 결투 원, 낮은 받침돌, 화분, 바람 발판
 ##   2층 (2.5~3.5m) : 서쪽 집, 동쪽 집, 북쪽 회랑, 남쪽 테라스, 부서지는 돌기둥
 ##   3층 (6.5m)     : 가운데 네 기둥과 그 위 다리 두 개, 동쪽 탑. 오르내리는 발판으로 올라간다.
 ## 가장자리에는 벽이 없다. 밀려 떨어지면 아래 허공으로 떨어진다 (VerticalKit 참고).
@@ -21,6 +21,9 @@ const GRID := 2.5
 ## 바닥 고리: 가운데(0)부터 바깥(3)까지, 가운데에서 이 거리(가로·세로 중 큰 쪽)까지
 const RINGS := [11.0, 17.0, 23.0, 27.0]
 const TIER3 := 6.5
+## 윗면 장식(띠, 판)은 몸통 윗면보다 이만큼 높게 둔다. 같은 높이에 색이 다른 면 두 장이 겹치면
+## 화면을 돌릴 때 두 색이 번갈아 비치며 반짝인다 (특히 웹 버전).
+const LIFT_TOP := 0.025
 
 # ---- 우리 경기장 색 ----
 const C_FLOOR_A := Color(0.70, 0.63, 0.53)
@@ -53,8 +56,6 @@ const BLOCKS := [
 	{"id": "east_tower", "c": Vector2(15.0, 1.5), "s": Vector2(3.0, 3.0), "base": 3.0, "h": TIER3 - 3.0, "style": "tower", "on": "east_house", "pickup": "동쪽 탑"},
 	{"id": "gallery", "c": Vector2(0, -14), "s": Vector2(14, 3.5), "base": 0.0, "h": 3.0, "style": "gallery", "pickup": "북쪽 회랑"},
 	{"id": "terrace", "c": Vector2(0, 14), "s": Vector2(10, 4), "base": 0.0, "h": 2.5, "style": "terrace"},
-	{"id": "crate_c1", "c": Vector2(-10.5, 7.5), "s": Vector2(1.8, 1.8), "base": 0.0, "h": 1.1, "style": "crate"},
-	{"id": "crate_c2", "c": Vector2(10.5, -7.5), "s": Vector2(1.8, 1.8), "base": 0.0, "h": 1.1, "style": "crate"},
 	# ---- 바깥 둘째 고리 (두 번째로 무너짐) : 부서지는 돌기둥과 발판 ----
 	{"id": "obelisk_nw", "c": Vector2(-19.5, -12), "s": Vector2(1.6, 1.6), "base": 0.0, "h": 4.6, "style": "obelisk", "pickup": "돌기둥 위"},
 	{"id": "obelisk_se", "c": Vector2(19.5, 12), "s": Vector2(1.6, 1.6), "base": 0.0, "h": 4.6, "style": "obelisk", "pickup": "돌기둥 위"},
@@ -65,13 +66,13 @@ const BLOCKS := [
 	{"id": "step3", "c": Vector2(-14.6, 19.6), "s": Vector2(2.2, 2.2), "base": 0.0, "h": 3.3, "style": "step"},
 	{"id": "runwall_w", "c": Vector2(-5.5, 20), "s": Vector2(0.6, 6), "base": 0.0, "h": 4.0, "style": "runwall", "no_climb": true},
 	{"id": "runwall_e", "c": Vector2(5.5, 20), "s": Vector2(0.6, 6), "base": 0.0, "h": 4.0, "style": "runwall", "no_climb": true},
-	{"id": "crate_b1", "c": Vector2(19.5, -19.5), "s": Vector2(2, 2), "base": 0.0, "h": 1.1, "style": "crate"},
-	{"id": "crate_b2", "c": Vector2(-20, -20), "s": Vector2(1.6, 1.6), "base": 0.0, "h": 1.1, "style": "crate"},
+	{"id": "planter_b1", "c": Vector2(19.5, -19.5), "s": Vector2(2, 2), "base": 0.0, "h": 1.1, "style": "planter"},
+	{"id": "planter_b2", "c": Vector2(-20, -20), "s": Vector2(1.6, 1.6), "base": 0.0, "h": 1.1, "style": "planter"},
 	# ---- 맨 바깥 고리 (가장 먼저 무너짐) ----
-	{"id": "crate_a1", "c": Vector2(-25, -6), "s": Vector2(2, 2), "base": 0.0, "h": 1.1, "style": "crate"},
-	{"id": "crate_a2", "c": Vector2(25, 6), "s": Vector2(2, 2), "base": 0.0, "h": 1.1, "style": "crate"},
-	{"id": "crate_a3", "c": Vector2(8, 25), "s": Vector2(1.6, 1.6), "base": 0.0, "h": 1.1, "style": "crate"},
-	{"id": "crate_a4", "c": Vector2(-8, -25), "s": Vector2(1.6, 1.6), "base": 0.0, "h": 1.1, "style": "crate"},
+	{"id": "planter_a1", "c": Vector2(-25, -6), "s": Vector2(2, 2), "base": 0.0, "h": 1.1, "style": "planter"},
+	{"id": "planter_a2", "c": Vector2(25, 6), "s": Vector2(2, 2), "base": 0.0, "h": 1.1, "style": "planter"},
+	{"id": "planter_a3", "c": Vector2(8, 25), "s": Vector2(1.6, 1.6), "base": 0.0, "h": 1.1, "style": "planter"},
+	{"id": "planter_a4", "c": Vector2(-8, -25), "s": Vector2(1.6, 1.6), "base": 0.0, "h": 1.1, "style": "planter"},
 ]
 
 ## 계단/경사로: 아래 끝, 위 끝, 너비, 올라가면 닿는 구조물
@@ -101,20 +102,22 @@ const JUMP_LINKS := [["step1", "step2"], ["step2", "step3"], ["step3", "obelisk_
 ## 높이가 같아 걸어서 이어지는 구조물 (다리 ↔ 기둥)
 const TOP_LINKS := [["bridge_n", "spire_nw"], ["bridge_n", "spire_ne"], ["bridge_s", "spire_sw"], ["bridge_s", "spire_se"]]
 
-## 차고 던질 수 있는 나무 상자 자리 (바닥 높이 0). 가운데와 둘째 고리에 흩어 둔다.
-const CRATES := [
-	Vector3(-2.6, 0, 3.2), Vector3(2.8, 0, -3.0), Vector3(-5.6, 0, -2.4), Vector3(5.8, 0, 2.6),
-	Vector3(-9.6, 0, 5.2), Vector3(9.6, 0, -5.6), Vector3(-3.0, 0, -11.0), Vector3(3.0, 0, 11.0),
-	Vector3(-17.5, 0, -6.0), Vector3(17.5, 0, 6.5),
+## 바람 발판: 가운데 (x, z), 내려앉는 곳(발 높이), 궤적 꼭대기 높이, 내려앉는 구조물(길찾기)
+##   안쪽 둘은 기둥 꼭대기로 솟구치고, 바깥 둘은 집 지붕 위를 넘어 경기장 한가운데로 날아든다.
+const LAUNCH_PADS := [
+	{"id": "pad_sw", "c": Vector2(-10.5, 7.5), "to": Vector3(-7.0, TIER3, 7.0), "apex": 8.6, "area": "spire_sw"},
+	{"id": "pad_ne", "c": Vector2(10.5, -7.5), "to": Vector3(7.0, TIER3, -7.0), "apex": 8.6, "area": "spire_ne"},
+	{"id": "pad_w", "c": Vector2(-20.5, 0.0), "to": Vector3(-2.4, 0.0, 0.0), "apex": 9.0, "area": "ground"},
+	{"id": "pad_e", "c": Vector2(20.5, -1.5), "to": Vector3(2.4, 0.0, -1.5), "apex": 9.0, "area": "ground"},
 ]
 
 ## 낭떠러지에 떨어진 뒤 다시 서는 자리
 const SAFE_SPOTS := [Vector3(0, 0.1, 4.5), Vector3(0, 0.1, -4.5), Vector3(-2.2, 0.1, 0), Vector3(2.2, 0.1, 0)]
 
 var fighters: Array = []        # 플레이어와 AI (Game 이 넣어 준다)
-var crates: Array[ArenaCrate] = []   # 차고 던질 수 있는 나무 상자
 var director: ArenaDirector
 var lifts: Array[ArenaLift] = []
+var pads: Array[LaunchPad] = []
 var ziplines: Array[Zipline] = []
 var breakables := {}            # id -> BreakablePillar
 var alive_ring := 3             # 이 번호까지의 고리가 남아 있다 (경고가 뜬 고리는 이미 빠진다)
@@ -161,15 +164,17 @@ func _ready() -> void:
 		add_child(zl)
 		zl.setup(z.id, z.a, z.b, _mats)
 		ziplines.append(zl)
+	for pd in LAUNCH_PADS:
+		var pad := LaunchPad.new()
+		var c: Vector2 = pd.c
+		_rings[ring_of(Vector3(c.x, 0, c.y))].add_child(pad)
+		pad.setup(pd.id, Vector3(c.x, 0, c.y), pd.to, pd.apex, _mats)
+		pads.append(pad)
+		# 발판은 지나가는 바닥이 아니다: AI 는 탈 때만 밟는다
+		_obstacles.append(Rect2(c - Vector2.ONE * LaunchPad.RADIUS, Vector2.ONE * LaunchPad.RADIUS * 2.0))
 	_build_backdrop()
+	_build_sky_life()
 	_build_nav()
-	for i in CRATES.size():
-		var c := ArenaCrate.new()
-		c.name = "Crate%d" % i
-		c.arena = self
-		add_child(c)
-		c.setup(CRATES[i] + Vector3.UP * (ArenaCrate.SIZE * 0.5 + 0.02), _mats)
-		crates.append(c)
 	# 고리마다 움직이지 않는 장식을 재질별로 합친다 (웹 버전이 그릴 물체 수를 줄인다)
 	for r in _rings:
 		LowPoly.merge_children(r, false, _ring_warn.values())
@@ -183,6 +188,8 @@ func set_fighters(list: Array) -> void:
 	director.fighters = list
 	for l in lifts:
 		l.fighters = list
+	for pd in pads:
+		pd.fighters = list
 
 
 func _make_materials() -> void:
@@ -191,11 +198,12 @@ func _make_materials() -> void:
 	_mats.teal = LowPoly.mat(C_TEAL, 0.75)
 	_mats.coral = LowPoly.mat(C_CORAL, 0.8)
 	_mats.navy = LowPoly.mat(C_NAVY, 0.7)
-	_mats.gold = LowPoly.mat(C_GOLD, 0.45, 0.35)
+	_mats.gold = LowPoly.mat(C_GOLD, 0.55, 0.3)   # 너무 매끈하면 작은 금장식이 화면을 돌릴 때 번쩍거린다
 	_mats.sand = LowPoly.mat(Color(0.86, 0.76, 0.60), 0.9)
 	_mats.rock = LowPoly.mat(C_ROCK, 0.95)
 	_mats.rock2 = LowPoly.mat(C_ROCK.darkened(0.15), 0.95)
 	_mats.window = LowPoly.mat(Color(0.16, 0.24, 0.32), 0.25, 0.2)
+	_mats.leaf = LowPoly.mat(Color(0.36, 0.60, 0.38), 0.9)
 	var vc := StandardMaterial3D.new()
 	vc.vertex_color_use_as_albedo = true
 	vc.vertex_color_is_srgb = true
@@ -314,41 +322,46 @@ func _build_floor() -> void:
 			var h := (ix * 7 + iz * 13) % 5
 			var c := C_FLOOR_A if (ix + iz) % 2 == 0 else C_FLOOR_B
 			c = c.darkened(h * 0.008 + r * 0.012)
-			_quad(st, Vector3(x0, 0, z0), Vector3(x0 + tile, 0, z0 + tile), C_GROUT)
-			_quad(st, Vector3(x0 + 0.05, 0.004, z0 + 0.05), Vector3(x0 + tile - 0.05, 0.004, z0 + tile - 0.05), c)
+			# 줄눈과 타일은 같은 높이에 겹치지 않게 나란히 깐다 (겹쳐 깔면 멀리서 깜빡인다)
+			var g := 0.05
+			_quad(st, Vector3(x0 + g, 0, z0 + g), Vector3(x0 + tile - g, 0, z0 + tile - g), c)
+			_quad(st, Vector3(x0, 0, z0), Vector3(x0 + tile, 0, z0 + g), C_GROUT)
+			_quad(st, Vector3(x0, 0, z0 + tile - g), Vector3(x0 + tile, 0, z0 + tile), C_GROUT)
+			_quad(st, Vector3(x0, 0, z0 + g), Vector3(x0 + g, 0, z0 + tile - g), C_GROUT)
+			_quad(st, Vector3(x0 + tile - g, 0, z0 + g), Vector3(x0 + tile, 0, z0 + tile - g), C_GROUT)
 	# 고리 경계 띠 (바깥 고리에 속해서 같이 무너진다)
 	for r in range(1, RINGS.size()):
 		var d: float = RINGS[r - 1]
 		var st: SurfaceTool = sts[r]
 		var w := 0.28
-		_quad(st, Vector3(-d - w, 0.008, -d - w), Vector3(d + w, 0.008, -d), C_CORAL)
-		_quad(st, Vector3(-d - w, 0.008, d), Vector3(d + w, 0.008, d + w), C_CORAL)
-		_quad(st, Vector3(-d - w, 0.008, -d), Vector3(-d, 0.008, d), C_CORAL)
-		_quad(st, Vector3(d, 0.008, -d), Vector3(d + w, 0.008, d), C_CORAL)
+		_quad(st, Vector3(-d - w, 0.012, -d - w), Vector3(d + w, 0.012, -d), C_CORAL)
+		_quad(st, Vector3(-d - w, 0.012, d), Vector3(d + w, 0.012, d + w), C_CORAL)
+		_quad(st, Vector3(-d - w, 0.012, -d), Vector3(-d, 0.012, d), C_CORAL)
+		_quad(st, Vector3(d, 0.012, -d), Vector3(d + w, 0.012, d), C_CORAL)
 	# 맨 바깥 가장자리: 금색 테두리 (벽이 없다는 표시)
 	var o: float = HALF
 	var edge: SurfaceTool = sts[RINGS.size() - 1]
-	_quad(edge, Vector3(-o, 0.008, -o), Vector3(o, 0.008, -o + 0.35), C_GOLD)
-	_quad(edge, Vector3(-o, 0.008, o - 0.35), Vector3(o, 0.008, o), C_GOLD)
-	_quad(edge, Vector3(-o, 0.008, -o), Vector3(-o + 0.35, 0.008, o), C_GOLD)
-	_quad(edge, Vector3(o - 0.35, 0.008, -o), Vector3(o, 0.008, o), C_GOLD)
+	_quad(edge, Vector3(-o, 0.012, -o), Vector3(o, 0.012, -o + 0.35), C_GOLD)
+	_quad(edge, Vector3(-o, 0.012, o - 0.35), Vector3(o, 0.012, o), C_GOLD)
+	_quad(edge, Vector3(-o, 0.012, -o), Vector3(-o + 0.35, 0.012, o), C_GOLD)
+	_quad(edge, Vector3(o - 0.35, 0.012, -o), Vector3(o, 0.012, o), C_GOLD)
 	# 가운데 결투 원
 	var core: SurfaceTool = sts[0]
-	_ring_mesh(core, 0.0, 8.0, 0.007, C_FLOOR_A, 48)
-	_ring_mesh(core, 7.4, 8.0, 0.009, C_CORAL, 48)
-	_ring_mesh(core, 6.9, 7.05, 0.009, C_NAVY, 48)
-	_ring_mesh(core, 2.4, 2.7, 0.009, C_GOLD, 32)
+	_ring_mesh(core, 0.0, 8.0, 0.012, C_FLOOR_A, 48)
+	_ring_mesh(core, 7.4, 8.0, 0.024, C_CORAL, 48)
+	_ring_mesh(core, 6.9, 7.05, 0.024, C_NAVY, 48)
+	_ring_mesh(core, 2.4, 2.7, 0.024, C_GOLD, 32)
 	for k in 8:
 		var a := TAU * k / 8.0 + PI / 8.0
 		var dd := Vector3(cos(a), 0, sin(a))
 		var side := Vector3(-dd.z, 0, dd.x) * 0.09
 		var p1 := dd * 2.9
 		var p2 := dd * 6.7
-		var up := Vector3.UP * 0.009
+		var up := Vector3.UP * 0.024
 		_tri(core, p1 - side + up, p2 - side + up, p2 + side + up, C_TEAL)
 		_tri(core, p1 - side + up, p2 + side + up, p1 + side + up, C_TEAL)
-	_ring_mesh(core, 0.0, 1.2, 0.011, C_NAVY, 8)
-	_ring_mesh(core, 0.0, 0.5, 0.013, C_GOLD, 8)
+	_ring_mesh(core, 0.0, 1.2, 0.024, C_NAVY, 8)
+	_ring_mesh(core, 0.0, 0.5, 0.036, C_GOLD, 8)
 
 	for r in RINGS.size():
 		var mi := MeshInstance3D.new()
@@ -372,7 +385,7 @@ func _build_floor() -> void:
 			for s in _ring_strips(r):
 				var c: Vector2 = s[0]
 				var sz: Vector2 = s[1]
-				_quad(wst, Vector3(c.x - sz.x * 0.5, 0.02, c.y - sz.y * 0.5), Vector3(c.x + sz.x * 0.5, 0.02, c.y + sz.y * 0.5), Color.WHITE)
+				_quad(wst, Vector3(c.x - sz.x * 0.5, 0.05, c.y - sz.y * 0.5), Vector3(c.x + sz.x * 0.5, 0.05, c.y + sz.y * 0.5), Color.WHITE)
 			var wm := MeshInstance3D.new()
 			wm.mesh = wst.commit()
 			wm.material_override = (_mats.warn as Material).duplicate()
@@ -468,16 +481,14 @@ func _build_block(b: Dictionary) -> void:
 			_style_bridge(center, size)
 		"plinth":
 			_part(LowPoly.box(size), _mats.teal, center)
-			_part(LowPoly.box(Vector3(size.x + 0.08, 0.12, size.z + 0.08)), _mats.gold, center + Vector3(0, size.y * 0.5 - 0.06, 0))
+			_part(LowPoly.box(Vector3(size.x + 0.08, 0.12, size.z + 0.08)), _mats.gold, center + Vector3(0, size.y * 0.5 - 0.06 + LIFT_TOP, 0))
 			_part(LowPoly.box(Vector3(size.x + 0.14, 0.2, size.z + 0.14)), _mats.stone2, center + Vector3(0, -size.y * 0.5 + 0.1, 0))
 		"step":
 			var m: Material = [_mats.teal, _mats.navy, _mats.coral][int(b.h / 1.1 + 0.1) % 3]
 			_part(LowPoly.box(size), m, center)
-			_part(LowPoly.box(Vector3(size.x + 0.06, 0.12, size.z + 0.06)), _mats.stone, center + Vector3(0, size.y * 0.5 - 0.06, 0))
-		"crate":
-			_part(LowPoly.box(size), _mats.sand, center)
-			for y in [-0.42, 0.42]:
-				_part(LowPoly.box(Vector3(size.x + 0.04, 0.1, size.z + 0.04)), _mats.navy, center + Vector3(0, y * size.y, 0))
+			_part(LowPoly.box(Vector3(size.x + 0.06, 0.12, size.z + 0.06)), _mats.stone, center + Vector3(0, size.y * 0.5 - 0.06 + LIFT_TOP, 0))
+		"planter":
+			_style_planter(center, size, b)
 		"runwall":
 			_style_runwall(center, size)
 
@@ -489,8 +500,8 @@ func _style_pillar(center: Vector3, size: Vector3) -> void:
 	_part(LowPoly.box(Vector3(size.x + 0.2, 0.5, size.z + 0.2)), _mats.stone2, Vector3(center.x, bottom + 0.25, center.z))
 	for y in [2.0, 4.0]:
 		_part(LowPoly.box(Vector3(size.x + 0.06, 0.3, size.z + 0.06)), _mats.coral, Vector3(center.x, bottom + y, center.z))
-	_part(LowPoly.box(Vector3(size.x + 0.16, 0.35, size.z + 0.16)), _mats.navy, Vector3(center.x, top - 0.17, center.z))
-	_part(LowPoly.cyl(0.45, 0.5, 0.06, 8), _mats.gold, Vector3(center.x, top + 0.03, center.z))
+	_part(LowPoly.box(Vector3(size.x + 0.16, 0.35, size.z + 0.16)), _mats.navy, Vector3(center.x, top - 0.175 + LIFT_TOP, center.z))
+	_part(LowPoly.cyl(0.45, 0.5, 0.06, 8), _mats.gold, Vector3(center.x, top + 0.03 + LIFT_TOP * 2.0, center.z))
 	_holds(center, size, bottom + 0.8, int(size.y) - 1)
 
 
@@ -513,8 +524,8 @@ func _style_house(center: Vector3, size: Vector3, b: Dictionary) -> void:
 	var bottom := center.y - size.y * 0.5
 	var top := center.y + size.y * 0.5
 	_part(LowPoly.box(Vector3(size.x + 0.12, 0.6, size.z + 0.12)), _mats.stone2, Vector3(center.x, bottom + 0.3, center.z))
-	_part(LowPoly.box(Vector3(size.x + 0.1, 0.35, size.z + 0.1)), _mats.teal, Vector3(center.x, top - 0.175, center.z))
-	_part(LowPoly.box(Vector3(size.x - 1.2, 0.02, size.z - 1.2)), _mats.stone2, Vector3(center.x, top + 0.01, center.z))
+	_part(LowPoly.box(Vector3(size.x + 0.1, 0.35, size.z + 0.1)), _mats.teal, Vector3(center.x, top - 0.175 + LIFT_TOP, center.z))
+	_part(LowPoly.box(Vector3(size.x - 1.2, 0.02, size.z - 1.2)), _mats.stone2, Vector3(center.x, top + 0.01 + LIFT_TOP * 2.0, center.z))
 	# 지붕 모서리 장식 (낮아서 걸리지 않는다)
 	for sx in [-1.0, 1.0]:
 		for sz in [-1.0, 1.0]:
@@ -536,15 +547,15 @@ func _style_house(center: Vector3, size: Vector3, b: Dictionary) -> void:
 func _style_tower(center: Vector3, size: Vector3) -> void:
 	_part(LowPoly.box(size), _mats.stone2, center)
 	var top := center.y + size.y * 0.5
-	_part(LowPoly.box(Vector3(size.x + 0.1, 0.3, size.z + 0.1)), _mats.coral, Vector3(center.x, top - 0.15, center.z))
-	_part(LowPoly.cyl(0.5, 0.55, 0.06, 8), _mats.gold, Vector3(center.x, top + 0.03, center.z))
+	_part(LowPoly.box(Vector3(size.x + 0.1, 0.3, size.z + 0.1)), _mats.coral, Vector3(center.x, top - 0.15 + LIFT_TOP, center.z))
+	_part(LowPoly.cyl(0.5, 0.55, 0.06, 8), _mats.gold, Vector3(center.x, top + 0.03 + LIFT_TOP * 2.0, center.z))
 	_holds(center, size, center.y - size.y * 0.5 + 0.4, 3)
 
 
 func _style_gallery(center: Vector3, size: Vector3) -> void:
 	_part(LowPoly.box(size), _mats.stone, center)
 	var top := center.y + size.y * 0.5
-	_part(LowPoly.box(Vector3(size.x + 0.08, 0.3, size.z + 0.08)), _mats.navy, Vector3(center.x, top - 0.15, center.z))
+	_part(LowPoly.box(Vector3(size.x + 0.08, 0.3, size.z + 0.08)), _mats.navy, Vector3(center.x, top - 0.15 + LIFT_TOP, center.z))
 	var fz := center.z + size.z * 0.5 + 0.02
 	for k in range(-2, 3):
 		var x: float = center.x + k * 2.4
@@ -556,8 +567,8 @@ func _style_gallery(center: Vector3, size: Vector3) -> void:
 func _style_terrace(center: Vector3, size: Vector3) -> void:
 	_part(LowPoly.box(size), _mats.stone, center)
 	var top := center.y + size.y * 0.5
-	_part(LowPoly.box(Vector3(size.x + 0.1, 0.3, size.z + 0.1)), _mats.coral, Vector3(center.x, top - 0.15, center.z))
-	_part(LowPoly.box(Vector3(size.x - 1.0, 0.02, size.z - 1.0)), _mats.sand, Vector3(center.x, top + 0.01, center.z))
+	_part(LowPoly.box(Vector3(size.x + 0.1, 0.3, size.z + 0.1)), _mats.coral, Vector3(center.x, top - 0.15 + LIFT_TOP, center.z))
+	_part(LowPoly.box(Vector3(size.x - 1.0, 0.02, size.z - 1.0)), _mats.sand, Vector3(center.x, top + 0.01 + LIFT_TOP * 2.0, center.z))
 	var fz := center.z - size.z * 0.5 - 0.02
 	for k in range(-1, 2):
 		_part(LowPoly.box(Vector3(1.6, 1.0, 0.05)), _mats.navy, Vector3(center.x + k * 3.0, 1.0, fz))
@@ -583,13 +594,28 @@ func _style_bridge(center: Vector3, size: Vector3) -> void:
 func _style_runwall(center: Vector3, size: Vector3) -> void:
 	_part(LowPoly.box(size), _mats.coral, center)
 	var top := center.y + size.y * 0.5
-	_part(LowPoly.box(Vector3(size.x + 0.08, 0.25, size.z + 0.08)), _mats.navy, Vector3(center.x, top - 0.12, center.z))
+	_part(LowPoly.box(Vector3(size.x + 0.08, 0.25, size.z + 0.08)), _mats.navy, Vector3(center.x, top - 0.125 + LIFT_TOP, center.z))
 	for side in [-1.0, 1.0]:
 		var x: float = center.x + side * (size.x * 0.5 + 0.02)
 		for k in range(-2, 3):
 			var z := center.z + k * 1.1
 			var chev := _part(LowPoly.prism(Vector3(0.7, 0.5, 0.04)), _mats.stone, Vector3(x, 1.9, z))
 			chev.rotation = Vector3(0, PI * 0.5, PI * 0.5)
+
+
+## 화분: 돌 화분에 네모나게 다듬은 덤불. 밟고 올라설 수 있는 낮은 엄폐물.
+func _style_planter(center: Vector3, size: Vector3, b: Dictionary) -> void:
+	var bottom := center.y - size.y * 0.5
+	var pot_h := size.y - 0.4
+	_part(LowPoly.box(Vector3(size.x, pot_h, size.z)), _mats.stone2, Vector3(center.x, bottom + pot_h * 0.5, center.z))
+	_part(LowPoly.box(Vector3(size.x + 0.1, 0.14, size.z + 0.1)), _mats.coral, Vector3(center.x, bottom + pot_h - 0.05, center.z))
+	var seed_v := int(absf(b.c.x * 7.0 + b.c.y * 13.0))
+	_part(LowPoly.box(Vector3(size.x - 0.16, 0.48, size.z - 0.16)), _mats.leaf, Vector3(center.x, bottom + pot_h + 0.2, center.z), Vector3.ZERO, 0.05, seed_v)
+	# 덤불 위 작은 꽃 몇 송이
+	for k in 3:
+		var a := TAU * k / 3.0 + seed_v
+		var p := Vector3(center.x + cos(a) * size.x * 0.25, bottom + size.y + 0.04, center.z + sin(a) * size.z * 0.25)
+		_part(LowPoly.sphere(0.12, 5, 3), _mats.gold if k == 0 else _mats.coral, p)
 
 
 func _build_lift(l: Dictionary) -> void:
@@ -802,6 +828,64 @@ func _build_backdrop() -> void:
 		var lm: Material = leaf2 if i % 4 == 0 else leaf
 		LowPoly.part(tree, LowPoly.sphere(1.3, 7, 5), lm, Vector3(0, 2.8, 0), Vector3.ZERO, 0.22, i + 100)
 		LowPoly.part(tree, LowPoly.sphere(0.9, 6, 4), grass2 if i % 3 == 0 else lm, Vector3(0.6, 3.4, 0.3), Vector3.ZERO, 0.15, i + 200)
+
+
+## 하늘 풍경: 경기장 둘레를 천천히 도는 열기구와 둥실 떠 있는 바위섬.
+## 싸우다 고개를 들거나 높이 날아오를 때 '하늘 위 경기장'이라는 느낌이 나게 한다. 충돌은 없다.
+func _build_sky_life() -> void:
+	var bark := LowPoly.mat(Color(0.45, 0.33, 0.24), 0.95)
+	var grass := LowPoly.mat(Color(0.56, 0.72, 0.42), 0.95)
+	var cream := LowPoly.mat(Color(0.96, 0.92, 0.84), 0.85)
+	var balloons := [
+		[_mats.coral, _mats.gold, 38.0, 14.0, 0.0, 0.035],
+		[_mats.teal, cream, 46.0, 20.0, 2.2, -0.028],
+		[_mats.navy, _mats.coral, 42.0, 8.0, 4.1, 0.03],
+	]
+	for i in balloons.size():
+		var bd: Array = balloons[i]
+		var orbit := Node3D.new()
+		orbit.rotation.y = bd[4]
+		add_child(orbit)
+		var b := Node3D.new()
+		b.position = Vector3(bd[2], bd[3], 0)
+		orbit.add_child(b)
+		var env := LowPoly.part(b, LowPoly.sphere(3.0, 10, 7), bd[0], Vector3(0, 4.2, 0), Vector3.ZERO, 0.08, i)
+		env.scale = Vector3(1, 1.18, 1)
+		# 가운데 띠와 꼭대기 덮개 (다른 색)
+		LowPoly.part(b, LowPoly.cyl(3.2, 3.2, 1.0, 10), bd[1], Vector3(0, 4.4, 0))
+		LowPoly.part(b, LowPoly.cyl(1.2, 2.2, 0.9, 10), bd[1], Vector3(0, 7.55, 0))
+		LowPoly.part(b, LowPoly.cyl(1.0, 0.7, 0.9, 8), bd[1], Vector3(0, 0.8, 0))
+		LowPoly.part(b, LowPoly.box(Vector3(1.3, 0.9, 1.3)), bark, Vector3(0, -1.6, 0), Vector3.ZERO, 0.04, i + 9)
+		for sx in [-1.0, 1.0]:
+			for sz in [-1.0, 1.0]:
+				LowPoly.part(b, LowPoly.box(Vector3(0.05, 2.3, 0.05)), bark, Vector3(sx * 0.6, -0.15, sz * 0.6))
+		LowPoly.merge_children(b, false)
+		# 천천히 경기장 둘레를 돌며 위아래로 흔들린다
+		var spin := create_tween().set_loops()
+		spin.tween_property(orbit, "rotation:y", orbit.rotation.y + TAU * signf(bd[5]), absf(TAU / bd[5]))
+		spin.tween_callback(func(): orbit.rotation.y -= TAU * signf(bd[5]))
+		var bob := create_tween().set_loops().set_trans(Tween.TRANS_SINE)
+		bob.tween_property(b, "position:y", bd[3] + 1.6, 5.0 + i)
+		bob.tween_property(b, "position:y", bd[3], 5.0 + i)
+	# 떠 있는 바위섬: 거꾸로 선 바위 + 풀 덮인 윗면 + 작은 나무
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 21
+	for i in 5:
+		var a := TAU * i / 5.0 + 0.4
+		var r := rng.randf_range(36.0, 48.0)
+		var isl := Node3D.new()
+		isl.position = Vector3(cos(a) * r, rng.randf_range(-6.0, 6.0), sin(a) * r)
+		isl.rotation.y = rng.randf() * TAU
+		add_child(isl)
+		var w := rng.randf_range(3.0, 5.5)
+		LowPoly.part(isl, LowPoly.cyl(w, 0.4, w * 1.6, 7, 2), _mats.rock, Vector3(0, -w * 0.8, 0), Vector3.ZERO, 0.35, i + 30)
+		LowPoly.part(isl, LowPoly.cyl(w + 0.15, w, 0.5, 7), grass, Vector3(0, 0.2, 0), Vector3.ZERO, 0.12, i + 40)
+		LowPoly.part(isl, LowPoly.cyl(0.18, 0.25, 1.8, 6), bark, Vector3(w * 0.3, 1.3, 0))
+		LowPoly.part(isl, LowPoly.sphere(1.2, 7, 5), _mats.leaf, Vector3(w * 0.3, 2.7, 0), Vector3.ZERO, 0.2, i + 50)
+		LowPoly.merge_children(isl, false)
+		var bob := create_tween().set_loops().set_trans(Tween.TRANS_SINE)
+		bob.tween_property(isl, "position:y", isl.position.y + 1.2, 4.0 + i * 0.7)
+		bob.tween_property(isl, "position:y", isl.position.y, 4.0 + i * 0.7)
 
 
 func _hill_height(x: float, z: float) -> float:
@@ -1052,7 +1136,17 @@ func _build_nav() -> void:
 		_connect_nearest(high, l.reach, 3.4, 2)
 		_link(low, high, "lift", true, i)
 
-	# 8) 짚라인: 출발 구조물 위 → 도착 구조물 위 (한쪽으로만)
+	# 8) 바람 발판: 발판 위 점 → 내려앉는 곳 (한쪽으로만)
+	for i in LAUNCH_PADS.size():
+		var pd: Dictionary = LAUNCH_PADS[i]
+		var c: Vector2 = pd.c
+		var on_pad := _add_node(Vector3(c.x, 0.0, c.y), "ground")
+		_connect_nearest(on_pad, "ground", 3.6, 3)
+		var land := _nearest_in_area(pd.to, pd.area)
+		if land >= 0:
+			_link(on_pad, land, "launch", false, i)
+
+	# 9) 짚라인: 출발 구조물 위 → 도착 구조물 위 (한쪽으로만)
 	for i in ZIPLINES.size():
 		var z: Dictionary = ZIPLINES[i]
 		var start := _nearest_in_area(Vector3(z.a.x, z.a.y - Zipline.HANG, z.a.z), z.from)
@@ -1120,7 +1214,7 @@ func area_of(p: Vector3) -> String:
 	return _node_area[i] if i >= 0 else "ground"
 
 
-## from 에서 to 로 가는 길. [{"pos": Vector3, "kind": "walk"/"jump"/"climb"/"drop"/"lift"/"zip", "ref": 번호}, ...]
+## from 에서 to 로 가는 길. [{"pos": Vector3, "kind": "walk"/"jump"/"climb"/"drop"/"lift"/"zip"/"launch", "ref": 번호}, ...]
 func find_path(from: Vector3, to: Vector3, can_climb: bool) -> Array:
 	var a := nearest_node(from)
 	var b := nearest_node(to)

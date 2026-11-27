@@ -5,9 +5,9 @@ extends SceneTree
 ##  2) 연속기 갈래: 베기 → 올려베기 → 쪼개기 / 베기 → 되베기 → 휩쓸기 → 회전 베기
 ##  3) 달리며 찌르기
 ##  4) 벽 달리기 → 벽 차고 베기
-##  5) 상자 베어 날리기, 상자 들어 던지기
+##  5) 바람 발판을 타고 경기장 한가운데로 날아들며 낙하 찍기
 ##  6) 금 간 돌기둥을 쳐서 상대에게 쓰러뜨리기
-##  7) AI 가 상자를 차고, 미끄러져 들어온다
+##  7) AI 가 미끄러져 들어온다
 
 const GAME := preload("res://scenes/main.tscn")
 
@@ -95,7 +95,7 @@ func _process(_delta: float) -> bool:
 		2: _combo(p, ai)
 		3: _run_thrust(p, ai)
 		4: _wall(p, ai)
-		5: _crates(p, ai)
+		5: _pad(p, ai)
 		6: _pillar(p, ai)
 		7: _ai_free(p, ai)
 		_:
@@ -202,36 +202,27 @@ func _wall(p: Player, ai: Duelist) -> void:
 		_next_scene()
 
 
-# 5) 상자: 베어 날리기, 들어 던지기
-func _crates(p: Player, ai: Duelist) -> void:
+# 5) 바람 발판: 서쪽 발판에서 지붕 위를 넘어 한가운데로 날아들며 낙하 찍기
+func _pad(p: Player, ai: Duelist) -> void:
 	var arena: Arena = _game.arena
-	var c: ArenaCrate = arena.crates[0]
-	var c2: ArenaCrate = arena.crates[1]
+	var pad: LaunchPad = arena.pads[2]
 	if _t == 1:
-		_hold_ai(ai, Vector3(0, 0.1, -1.0), Vector3(0, 0, 1))
-		_place(p, Vector3(0, 0.1, 6.5), ai.global_position + Vector3.UP * 0.6, -12)
-		c.global_position = Vector3(0, ArenaCrate.SIZE * 0.5 + 0.05, 5.3)
-		c.linear_velocity = Vector3.ZERO
-		c.rotation = Vector3.ZERO
-		_banner("상자를 베면 날아간다")
-	if _t == 22:
+		_hold_ai(ai, pad.target + Vector3(2.4, 0.1, 0), Vector3(-1, 0, 0))
+		_place(p, pad.global_position + Vector3(-3.0, 0.1, 0), pad.target + Vector3.UP * 2.0, 0)
+		_banner("바람 발판 — 밟으면 높이 날아오른다")
+	if _t > 1 and _t < 70:
+		Input.action_press("move_forward")
+	if _t > 20:
+		_turn_to(p, ai.global_position, 0.08)
+		if p._flying and p.velocity.y < 0.0:
+			p.head.rotation.x = lerpf(p.head.rotation.x, deg_to_rad(-35), 0.1)
+	if _t == 70:
+		Input.action_release("move_forward")
+	if p._flying and p.velocity.y < -2.0 and not _v.has("plunged"):
+		_v.plunged = true
+		_banner("날아가며 클릭 — 낙하 찍기")
 		_click(p)
-	if _t == 62:
-		c2.global_position = p.global_position + Vector3(0.7, ArenaCrate.SIZE * 0.5, -0.9)
-		c2.linear_velocity = Vector3.ZERO
-		c2.rotation = Vector3.ZERO
-		_face(p, c2.global_position)
-		p.head.rotation.x = deg_to_rad(-25)
-		_banner("F — 상자 들기")
-	if _t == 72:
-		p.try_grab()
-	if _t > 72 and _t < 92:
-		_turn_to(p, ai.global_position, 0.15)
-		p.head.rotation.x = lerpf(p.head.rotation.x, deg_to_rad(-3), 0.15)
-	if _t == 92:
-		_banner("F 나 클릭 — 던지기")
-		p.throw_crate()
-	if _t == 140:
+	if _t == 190:
 		_next_scene()
 
 
@@ -254,9 +245,8 @@ func _pillar(p: Player, ai: Duelist) -> void:
 		_next_scene()
 
 
-# 7) AI 도 자유롭게: 상자를 차고, 미끄러져 들어온다
+# 7) AI 도 자유롭게: 달려들고, 미끄러져 들어온다
 func _ai_free(p: Player, ai: Duelist) -> void:
-	var arena: Arena = _game.arena
 	if _t == 1:
 		ai.global_position = Vector3(0, 0.1, -3.0)
 		ai.velocity = Vector3.ZERO
@@ -264,19 +254,11 @@ func _ai_free(p: Player, ai: Duelist) -> void:
 		ai.active = true
 		ai.sm.go("idle")
 		_place(p, Vector3(0, 0.1, 6.0), ai.global_position + Vector3.UP)
-		var c: ArenaCrate = arena.crates[0]
-		c.global_position = Vector3(1.0, ArenaCrate.SIZE * 0.5 + 0.05, -2.2)
-		c.linear_velocity = Vector3.ZERO
-		_banner("상대도 상자를 차고, 미끄러져 들어온다")
-		ai._kick_cd = 0.0
-		ai._move_cd = 99.0
+		_banner("상대도 달려들고, 미끄러져 들어온다")
+		_v.kicked = 1
 	_turn_to(p, ai.global_position + Vector3.UP, 0.25)
-	if ai.stats.get("crate_kick", 0) >= 1 and not _v.has("kicked"):
-		_v.kicked = _t
-		ai._move_cd = 0.0
-		ai._kick_cd = 99.0
 	# 상대가 미끄러져 들어오게 거리를 벌려 둔다
-	if _v.has("kicked") and _t - int(_v.kicked) == 40:
+	if _t == 40:
 		var away := p.global_position - ai.global_position
 		away.y = 0
 		p.global_position = ai.global_position + away.normalized() * 5.0
