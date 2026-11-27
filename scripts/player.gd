@@ -185,7 +185,9 @@ var _weapon_pivot: Node3D      # 휘두를 때 돌아가는 부분
 var _blade_tip: Node3D
 var _blade_mat: StandardMaterial3D
 var _weapon_tween: Tween
-var _trail: MeshInstance3D
+var _trail: SwingTrail         # 휘두를 때 남는 빛 자취 (오른손 / 무기)
+var _trail_l: SwingTrail       # 왼손 (쌍단검, 수리검, 맨몸)
+var _trail_leg: SwingTrail     # 맨몸 발차기
 var _step_dist := 0.0          # 발소리: 지난 발소리 뒤로 걸은 거리
 var _hit_weapon := ""        # 나를 때린 상대의 무기 (맞는 소리를 고른다)
 var _hit_query := PhysicsShapeQueryParameters3D.new()
@@ -296,10 +298,16 @@ func _build_sword() -> void:
 		var fl := Weapons.build_model(base_l, weapon, true, opts)
 		_left_glow = fl.mat
 		_build_kick_leg(hm)
-		_trail = MeshInstance3D.new()
-		_trail.mesh = LowPoly.box(Vector3(0.001, 0.001, 0.001))
-		_trail.material_override = StandardMaterial3D.new()
-		_weapon_pivot.add_child(_trail)
+		# 주먹 끝에 짧은 번쩍임: 주먹 위아래 두 점으로 얇은 띠를 남긴다
+		_trail = SwingTrail.attach(camera, self, _fist_point(fr.tip, 0.045), _fist_point(fr.tip, -0.045), weapon)
+		_trail_l = SwingTrail.attach(camera, self, _fist_point(fl.tip, 0.045), _fist_point(fl.tip, -0.045), weapon)
+		var foot_tip := Node3D.new()
+		foot_tip.position = Vector3(0, 0.02, -0.2)
+		_kick_leg.add_child(foot_tip)
+		var foot_base := Node3D.new()
+		foot_base.position = Vector3(0, -0.1, 0.05)
+		_kick_leg.add_child(foot_base)
+		_trail_leg = SwingTrail.attach(camera, self, foot_tip, foot_base, weapon)
 		return
 
 	# 무기는 손잡이가 기준점, 날은 +Y 방향으로 뻗는다. 모양은 Weapons.build_model.
@@ -309,7 +317,6 @@ func _build_sword() -> void:
 	var model := Weapons.build_model(sword, weapon, false, opts)
 	_blade_mat = model.mat
 	_blade_tip = model.tip
-	var blade_len: float = model.len
 	if weapon == "spear":
 		# 창은 자루가 길어 손을 조금 더 뒤로, 날이 화면 가운데로
 		sword.position = Vector3(0, -0.35, 0.1)
@@ -322,21 +329,21 @@ func _build_sword() -> void:
 		var lsword := Node3D.new()
 		lsword.rotation_degrees = Vector3(-62, -8, 8)
 		_left_pivot.add_child(lsword)
-		Weapons.build_model(lsword, weapon, true, opts)
+		var lmodel := Weapons.build_model(lsword, weapon, true, opts)
+		_trail_l = SwingTrail.attach(camera, self, lmodel.tip, SwingTrail.make_base(lmodel.tip, weapon), weapon)
 	if weapon == "shuriken":
 		_held_star = model.root.get_child(0)
 
-	# 휘두를 때 남는 잔상
-	_trail = MeshInstance3D.new()
-	_trail.mesh = LowPoly.box(Vector3(0.02 if weapon != "greatsword" else 0.05, blade_len, 0.002))
-	var tm := StandardMaterial3D.new()
-	tm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	tm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	tm.albedo_color = Color(1, 1, 1, 0.0)
-	tm.cull_mode = BaseMaterial3D.CULL_DISABLED
-	_trail.material_override = tm
-	_trail.position = _blade_tip.position - Vector3(0, blade_len * 0.08, 0)
-	sword.add_child(_trail)
+	# 휘두를 때 남는 빛 자취 (검기): 날 끝과 손잡이 쪽 점이 지나간 길 (scripts/combat/swing_trail.gd)
+	_trail = SwingTrail.attach(camera, self, _blade_tip, SwingTrail.make_base(_blade_tip, weapon), weapon)
+
+
+## 주먹 끝 근처에 점 하나 (위아래로 조금 떨어뜨려 띠에 폭을 준다)
+func _fist_point(tip: Node3D, dy: float) -> Node3D:
+	var n := Node3D.new()
+	n.position = tip.position + Vector3(0, dy, 0.03)
+	tip.get_parent().add_child(n)
+	return n
 
 
 func _make_left_root() -> void:
@@ -621,8 +628,7 @@ func _physics_process(delta: float) -> void:
 	if controls_enabled and not dead:
 		add_gauge(Weapons.GAUGE.regen * delta)
 	_update_hands(delta)
-	var trail_mat: StandardMaterial3D = _trail.material_override
-	trail_mat.albedo_color.a = move_toward(trail_mat.albedo_color.a, 0.35 if _attack_phase == "active" else 0.0, delta * 4.0 if _attack_phase != "active" else 99.0)
+	_update_trails()
 	_update_camera(delta, on_floor, _sprinting)
 	_update_rope()
 
@@ -871,8 +877,6 @@ func _use_stamina(amount: float) -> void:
 
 ## 시작 전에 잔상과 칼 빛 효과를 한 번 그려 둔다 (첫 공격 때 멈칫하지 않도록).
 func warmup() -> void:
-	var trail_mat: StandardMaterial3D = _trail.material_override
-	trail_mat.albedo_color.a = 0.02
 	_blade_mat.emission_energy_multiplier = 0.01
 
 
@@ -1725,10 +1729,41 @@ func _check_hits(data: Dictionary) -> void:
 
 func _on_hit_landed(big: bool) -> void:
 	_shake = 0.6 if big else 0.3
-	# 타격감: 아주 잠깐 시간을 멈춘다 (히트스톱)
-	Engine.time_scale = 0.1
-	await get_tree().create_timer(0.06 if big else 0.035, true, false, true).timeout
-	Engine.time_scale = 1.0
+	# 타격감: 맞는 순간 아주 잠깐 멈춘다 (히트스톱). 무거운 무기일수록 길다
+	Fx.hitstop(self, Weapons.hitstop_time(weapon, big))
+
+
+## 빛 자취를 켜고 끈다: 휘두르는 동안(맞히는 구간)만 남긴다. 던지기와 잡기는 자취 없이.
+func _update_trails() -> void:
+	var swinging := false
+	var hand := "both"
+	var limb := ""
+	var sp := false
+	if sm.state == "attack" and _attack_phase == "active" and _move != "grab":
+		var data := _mv(_move)
+		swinging = not data.has("projectile")
+		hand = str(data.get("hand", "both"))
+		limb = str(data.get("limb", ""))
+	elif sm.state == "special" and _sp_phase == "active":
+		swinging = true
+		sp = true
+		hand = str(_sp.get("hand", "both"))
+	elif sm.state == "plunge":
+		swinging = true
+	var kicking := swinging and limb.begins_with("kick")
+	var right := swinging and not kicking and hand != "l"
+	var left := swinging and not kicking and hand != "r"
+	if weapon not in ["fists"]:
+		# 무기는 두 손이 함께 움직인다 (쌍단검/수리검은 왼손도 같이 자취를 남긴다)
+		right = swinging and not kicking
+		left = right
+	_trail.emitting = right
+	_trail.boost = sp
+	if _trail_l != null:
+		_trail_l.emitting = left
+		_trail_l.boost = sp
+	if _trail_leg != null:
+		_trail_leg.emitting = kicking
 
 
 # ---------------- 카메라 ----------------

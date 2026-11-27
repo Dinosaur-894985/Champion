@@ -19,6 +19,9 @@ const UPPER := 0.3        # 위팔 길이
 const FORE := 0.3         # 아래팔 길이 (손목까지)
 
 var blade_tip: Node3D
+var blade_tip_l: Node3D        # 왼손 끝 (쌍단검/수리검/맨몸의 왼 주먹). 없으면 null
+var foot_tip: Node3D           # 오른발 끝과 발목 (발차기 빛 자취)
+var foot_base: Node3D
 var blade_mat: StandardMaterial3D
 ## 들고 있는 무기 (Weapons.WEAPONS). 씬에 넣기 전에 정한다.
 var weapon := "sword"
@@ -457,6 +460,13 @@ func _build() -> void:
 			"rogue":
 				_p(knee, LowPoly.cyl(0.085 * _limb, 0.078 * _limb, 0.16, 7), leather_dark, Vector3(0, -0.3, 0))
 		_build_feet(knee, s_feet)
+		if side > 0:
+			foot_tip = Node3D.new()
+			foot_tip.position = Vector3(0, -0.47, -0.16)
+			knee.add_child(foot_tip)
+			foot_base = Node3D.new()
+			foot_base.position = Vector3(0, -0.3, -0.02)
+			knee.add_child(foot_base)
 		if side < 0:
 			_leg_l = leg
 			_knee_l = knee
@@ -541,6 +551,9 @@ func _build() -> void:
 		blade_tip = Node3D.new()
 		blade_tip.position = Vector3(0, -0.08, 0)
 		_wrist.add_child(blade_tip)
+		blade_tip_l = Node3D.new()
+		blade_tip_l.position = Vector3(0, -0.08, 0)
+		_wrist_l.add_child(blade_tip_l)
 		set_pose(MoveSet.BODY_POSES.guard, 12.0)
 	else:
 		var holder := Node3D.new()
@@ -560,7 +573,7 @@ func _build() -> void:
 			lh.position = Vector3(0, -0.04, 0)
 			lh.rotation_degrees = Vector3(-90, 0, 0)
 			_wrist_l.add_child(lh)
-			Weapons.build_model(lh, weapon, true, opts)
+			blade_tip_l = Weapons.build_model(lh, weapon, true, opts).tip
 
 	for m in find_children("*", "MeshInstance3D", true, false):
 		if not _body_meshes.has(m):

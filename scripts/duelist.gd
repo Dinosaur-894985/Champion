@@ -155,6 +155,12 @@ func _ready() -> void:
 	rig.weapon = weapon
 	rig.build = build
 	add_child(rig)
+	# 휘두를 때 남는 빛 자취 (검기): 경기장에 남는다 (scripts/combat/swing_trail.gd)
+	_trail = SwingTrail.attach(null, self, rig.blade_tip, _trail_base(rig.blade_tip), weapon)
+	if rig.blade_tip_l != null:
+		_trail_l = SwingTrail.attach(null, self, rig.blade_tip_l, _trail_base(rig.blade_tip_l), weapon)
+	if weapon == "fists" and rig.foot_tip != null:
+		_trail_leg = SwingTrail.attach(null, self, rig.foot_tip, rig.foot_base, weapon)
 	for n in ["idle", "approach", "circle"]:
 		sm.add(n, Callable(), _neutral_update)
 	sm.add("windup", _windup_enter, _windup_update) \
@@ -309,6 +315,45 @@ func _atk_mult() -> float:
 func _process(delta: float) -> void:
 	rig.animate(delta, global_transform.basis.inverse() * Vector3(velocity.x, 0, velocity.z))
 	_update_rope()
+	_update_trails()
+
+
+var _trail: SwingTrail
+var _trail_l: SwingTrail
+var _trail_leg: SwingTrail
+
+
+## 빛 자취의 손잡이 쪽 점. 맨몸은 주먹 위아래로 폭을 준다.
+func _trail_base(tip: Node3D) -> Node3D:
+	if weapon != "fists":
+		return SwingTrail.make_base(tip, weapon)
+	var b := Node3D.new()
+	b.position = tip.position + Vector3(0, 0.09, 0)
+	tip.get_parent().add_child(b)
+	return b
+
+
+## 휘두르는 동안(맞히는 구간)만 자취를 남긴다. 던지기와 잡기는 자취 없이.
+func _update_trails() -> void:
+	var swinging := false
+	var hand := ""
+	var limb := ""
+	if sm.state == "strike" and _attack != "grab":
+		var data := _mv(_attack)
+		swinging = not data.has("projectile")
+		hand = str(data.get("hand", ""))
+		limb = str(data.get("limb", ""))
+	elif sm.state == "plunge":
+		swinging = true
+	var kicking := swinging and limb.begins_with("kick")
+	var arms := swinging and not kicking
+	_trail.emitting = arms and (weapon != "fists" or hand != "l")
+	_trail.boost = _attack == "special"
+	if _trail_l != null:
+		_trail_l.emitting = arms and (weapon != "fists" or hand != "r")
+		_trail_l.boost = _trail.boost
+	if _trail_leg != null:
+		_trail_leg.emitting = kicking
 
 
 # ---------------- 판단 ----------------
@@ -1044,6 +1089,8 @@ func _try_hit(data: Dictionary) -> void:
 		"guard_broken", "hit", "wrong_guard":
 			Fx.impact(get_parent(), target.global_position + Vector3(0, 1.3, 0), _dir + Vector3.UP * 0.3,
 					Color(0.75, 0.1, 0.08), 14)
+			# 맞는 순간 멈춤: 맞는 쪽도 '쿵' 느끼게 (때릴 때보다 조금 짧게)
+			Fx.hitstop(self, Weapons.hitstop_time(weapon, str(info.react) == "stagger" or _attack == "special") * 0.8)
 
 
 # ---------------- 잡기 ----------------
