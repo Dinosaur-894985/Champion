@@ -11,7 +11,7 @@ extends SceneTree
 ## 실행: godot --headless --fixed-fps 60 -s res://tests/new_weapons_test.gd
 
 const GAME := preload("res://scenes/main.tscn")
-const PARTS := 7
+const PARTS := 8
 
 var _game: Node
 var _f := 0
@@ -30,7 +30,7 @@ func _initialize() -> void:
 func _weapon_for(part: int) -> Array:
 	# [내 무기, AI 무기]
 	match part:
-		1, 2:
+		1, 2, 8:
 			return ["shuriken", "sword"]
 		3, 4:
 			return ["sword", "shuriken"]
@@ -115,6 +115,7 @@ func _process(_delta: float) -> bool:
 		5: _fists(p, ai)
 		6: _staff(p, ai)
 		7: _looks(p, ai)
+		8: _ammo_air(p, ai)
 	return false
 
 
@@ -285,3 +286,37 @@ func _looks(p: Player, _ai: Duelist) -> void:
 		_check("looks", made == Weapons.ORDER.size() * CharacterBuild.COLORS.size() and o.color != a.color and free and back == sv.parts,
 				"rigs=%d contrast=%d/%d weapon_free=%s" % [made, a.color, o.color, free])
 		_next()
+
+
+# 8) 수리검 수, 공중에서 던지기 (낙하 찍기로 바뀌지 않기), 떨어진 것 줍기
+func _ammo_air(p: Player, ai: Duelist) -> void:
+	if _f == 2:
+		_hold_ai(ai)
+		_place(p, ai, 8.0)
+		_v.full = p.ammo
+	if _f == 5:
+		# 높이 떠 있을 때 Q: 던져야 한다
+		p.global_position.y = 4.5
+		p.velocity = Vector3.ZERO
+		p._request_attack("heavy")
+		_v.air_state = p.sm.state
+		_v.air_move = p._move
+	if _f == 30:
+		_check("air_throw", _v.air_state == "attack" and _v.air_move == "heavy" and p.ammo == _v.full - 1,
+				"state=%s move=%s ammo=%d/%d" % [_v.air_state, _v.air_move, p.ammo, p.ammo_max])
+	if _f == 70:
+		# 다 쓰면 못 던진다
+		p.ammo = 0
+		p._request_attack("heavy")
+		_v.empty_state = p.sm.state
+	if _f == 72:
+		# 떨어진 수리검 위를 지나가면 줍는다
+		var star := Projectile.launch(p.get_parent(), p.global_position + Vector3(0, 1.5, -1.0), Vector3.DOWN, 10.0,
+				{"damage": 1, "ammo": true}, p)
+		_v.star = star
+	if _f == 110:
+		_check("ammo_pickup", _v.empty_state != "attack" and p.ammo >= 1 and Weapons.falloff_mult("shuriken", 16.0) < 0.5
+				and is_equal_approx(Weapons.falloff_mult("shuriken", 5.0), 1.0),
+				"empty_state=%s ammo_after_pickup=%d" % [_v.empty_state, p.ammo])
+		_next()
+

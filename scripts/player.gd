@@ -19,6 +19,7 @@ signal attack_received(result: String)
 signal feinted                  # 공격을 준비하다 멈췄다 (속임수)
 signal guard_changed(dir: String)
 signal gauge_changed(value: float, max_value: float)   # 필살기 게이지
+signal ammo_changed(value: int, max_value: int)       # 수리검 수
 
 # --- 이동 ---
 const WALK_SPEED := 5.0
@@ -75,6 +76,9 @@ var traits := {"wall_climb": true, "wall_run": true}
 var weapon := "sword"
 ## 필살기 게이지 (0 ~ Weapons.GAUGE_MAX). 다 차면 V 로 필살기.
 var gauge := 0.0
+var ammo := 0                     # 들고 있는 수리검 수 (던지는 무기만)
+var ammo_max := 0
+var _ammo_t := 0.0
 
 var max_hp := MAX_HP
 var max_stamina := MAX_STAMINA
@@ -200,6 +204,8 @@ func _ready() -> void:
 	stamina = max_stamina
 	traits = {"wall_climb": build.has("wall"), "wall_run": build.has("wall")}
 	weapon = Weapons.valid(build.weapon)
+	ammo_max = Weapons.ammo_max(weapon)
+	ammo = ammo_max
 	skills = SkillKit.new(self, build)
 	vkit = VerticalKit.new(self)
 	collision_layer = 1
@@ -534,6 +540,7 @@ func _physics_process(delta: float) -> void:
 	if sm.state == "free" and _can_act() and Input.is_action_pressed("block"):
 		sm.go("block")
 	_guard_t += delta
+	_ammo_tick(delta)
 	_thrown_t = maxf(_thrown_t - delta, 0.0)
 	sm.tick(delta)
 	if blocking:
@@ -997,7 +1004,7 @@ func try_dash(dir := Vector2.ZERO) -> void:
 		return
 	if sm.state == "attack" and _attack_phase == "windup" and _move in ["counter", "grab"]:
 		return
-	if stamina < DASH_COST * 0.5:
+	if stamina < DASH_COST * build.dash_cost_mult() * 0.5:
 		return
 	var input := dir if dir != Vector2.ZERO else Input.get_vector("move_left", "move_right", "move_forward", "move_back")
 	if input == Vector2.ZERO:
@@ -1014,7 +1021,7 @@ func _dash_enter(d: Dictionary) -> void:
 	_iframes = DASH_IFRAMES
 	_since_dash = 0.0
 	_counter_used = false
-	_use_stamina(DASH_COST)
+	_use_stamina(DASH_COST * build.dash_cost_mult())
 	_pose_to(Weapons.fp_pose(weapon, "rest"), 0.12)
 	camera.fov += 8.0
 	_play("dash", 1.0 + _dash_local.x * 0.04)
@@ -1143,6 +1150,9 @@ func _start_attack(move_name: String) -> void:
 	var data: Dictionary = _mv(move_name)
 	if stamina < data.cost * 0.5:
 		return
+	if data.has("projectile") and ammo_max > 0 and ammo <= 0:
+		combat_event.emit("수리검이 없다! 떨어진 것을 주워라", Color(1.0, 0.7, 0.4))
+		return
 	if move_name in ["slash1", "slash2", "slash3", "spin"] and _press_t >= 0.0:
 		_press_owner = move_name
 	else:
@@ -1239,7 +1249,13 @@ func _enter_active(data: Dictionary) -> void:
 		var info := _hit_info.duplicate()
 		info.damage = int(round(float(info.damage) * build.damage_mult() * vkit.damage_mult()))
 		info.power = vkit.powered()
-		_throw_shuriken(int(pr.count), float(pr.spread), float(pr.speed), float(pr.get("homing", 0.0)), info)
+		var n := use_ammo(int(pr.count))
+		if n <= 0:
+			combat_event.emit("수리검이 없다! 떨어진 것을 주워라", Color(1.0, 0.7, 0.4))
+		if ammo_max > 0:
+			info.ammo = true
+			info.falloff_w = weapon
+		_throw_shuriken(n, float(pr.spread) * float(n) / float(maxi(int(pr.count), 1)), float(pr.speed), float(pr.get("homing", 0.0)), info)
 	else:
 		_play(_wsnd("swing_heavy" if _move in ["heavy", "charge", "slash3", "plunge"] or str(data.get("limb", "")).begins_with("kick") else "swing"))
 	var fwd := -transform.basis.z
@@ -2003,10 +2019,17 @@ func _vertical_attack(kind: String) -> bool:
 	var looking_down := head.rotation.x < deg_to_rad(-18)
 	# 벽 차고 베기: 벽을 달리는 중이거나 벽을 막 차고 뛰었을 때 (아래를 보고 높이 있으면 낙하 찍기)
 	var off_wall := sm.state == "wallrun" or (_since_walljump < float(MoveSet.RUN.wall_slash_time) and sm.state == "free")
+	# 던지는 무기(수리검): Q 는 공중에서도 늘 던진다 (아래에 있는 상대도 노릴 수 있게).
+	# 낙하 찍기는 아래를 보고 왼클릭할 때만 나간다
+	var thrower := _mv("heavy").has("projectile")
+	if thrower and kind == "heavy":
+		if sm.is_in(["free", "dash"]):
+			_start_attack("heavy")
+		return true
 	if off_wall and kind in ["combo", "light"] and not (looking_down and h >= PLUNGE_MIN_HEIGHT):
 		_wall_slash()
 		return true
-	if h >= PLUNGE_MIN_HEIGHT and (kind == "heavy" or looking_down or h >= 3.2):
+	if h >= PLUNGE_MIN_HEIGHT and (looking_down if thrower else (kind == "heavy" or looking_down or h >= 3.2)):
 		if stamina < float(_mv("plunge").cost) * 0.5:
 			return false
 		sm.go("plunge")
@@ -2701,3 +2724,36 @@ func _wall_slash() -> void:
 func on_falling_hazard(_axis: Vector3, _from: Vector3) -> void:
 	combat_event.emit("기둥이 쓰러진다! 피해!", Color(1.0, 0.55, 0.3))
 	_shake = maxf(_shake, 0.4)
+
+
+# ---------------- 던지는 무기의 수 (수리검) ----------------
+
+## 던질 수 있는 만큼 쓴다. 0 장이면 못 던진다. 돌려준 값만큼 던진다.
+func use_ammo(want: int) -> int:
+	if ammo_max <= 0:
+		return want
+	var n := mini(want, ammo)
+	ammo -= n
+	_ammo_t = 0.0
+	ammo_changed.emit(ammo, ammo_max)
+	return n
+
+
+## 떨어진 수리검을 주웠다 (Projectile 이 부른다). 가득 차 있으면 줍지 않는다.
+func pick_up_star() -> bool:
+	if dead or ammo_max <= 0 or ammo >= ammo_max:
+		return false
+	ammo += 1
+	ammo_changed.emit(ammo, ammo_max)
+	_play("shuriken_stick")
+	return true
+
+
+func _ammo_tick(delta: float) -> void:
+	if ammo_max <= 0 or ammo >= ammo_max:
+		return
+	_ammo_t += delta
+	if _ammo_t >= Weapons.stat_or(weapon, "ammo_regen", 4.0):
+		_ammo_t = 0.0
+		ammo += 1
+		ammo_changed.emit(ammo, ammo_max)

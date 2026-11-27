@@ -5,12 +5,16 @@ extends Node3D
 ##   사람(플레이어/AI)  : 근접 공격과 같은 판정 (막기, 튕겨내기, 피하기가 그대로 된다)
 ##   기둥/허수아비 : take_hit
 ##   벽과 바닥          : 꽂혀서 잠깐 남았다 사라진다
-## 막히면 튕겨 나가 떨어진다. 피하면 그대로 지나간다.
+## 막히면 튕겨 나가 떨어진다. 맞기 직전에 막으면(튕겨내기) 던진 사람에게 되돌아간다. 피하면 그대로 지나간다.
+## 멀리 날아갈수록 약해진다 (Weapons.falloff_mult). 떨어진 수리검은 던진 사람이 가까이 지나가면 주워 간다.
 
 const GRAVITY := 3.0           # 아주 조금 떨어진다 (멀리 던지면 살짝 낮게)
 const LIFE := 2.2
 const STUCK_LIFE := 1.6
 const SPIN := 34.0             # 초당 회전 (라디안)
+const PICK_LIFE := 10.0        # 주울 수 있는 수리검이 바닥에 남아 있는 시간
+const PICK_RADIUS := 1.7       # 이만큼 가까이 지나가면 줍는다
+const REFLECT_SPEED := 0.9     # 튕겨 돌려보낼 때 빠르기 배율
 const AIM_RADIUS := 0.42       # 노린 상대 몸 둘레 이만큼 안을 지나가면 맞는다 (얇은 몸에 너무 깐깐하지 않게)
 
 var velocity := Vector3.ZERO
@@ -18,6 +22,7 @@ var thrower: Node3D
 var target: Node3D             # 노리는 상대 (조금씩 따라 휜다)
 var homing := 0.0              # 초당 방향을 틀어 주는 정도
 var info := {}
+var origin := Vector3.ZERO     # 던진 곳 (거리에 따른 약화)
 
 var _life := LIFE
 var _stuck := false
@@ -39,6 +44,7 @@ static func launch(world: Node, from: Vector3, dir: Vector3, speed: float, hit_i
 	p.info["projectile"] = true
 	world.add_child(p)
 	p.global_position = from
+	p.origin = from
 	if aim_at != null and aim_at.has_method("on_incoming_object"):
 		aim_at.on_incoming_object(p)
 	return p
@@ -72,6 +78,10 @@ func _physics_process(delta: float) -> void:
 	if _stuck:
 		if _life <= 0.0:
 			queue_free()
+		elif info.get("ammo", false) and is_instance_valid(thrower) and thrower.has_method("pick_up_star"):
+			var d := thrower.global_position + Vector3.UP * 0.9 - global_position
+			if Vector2(d.x, d.z).length() < PICK_RADIUS and absf(d.y) < 2.2 and thrower.pick_up_star():
+				queue_free()
 		return
 	if _life <= 0.0:
 		queue_free()
@@ -140,10 +150,15 @@ func _strike(body: Node3D, dir: Vector3) -> void:
 	var flat := Vector3(dir.x, 0, dir.z)
 	flat = flat.normalized() if flat.length() > 0.01 else Vector3.FORWARD
 	var result := ""
+	var hit_info := info
+	if info.has("falloff_w"):
+		# 멀리서 맞으면 약해진다
+		hit_info = info.duplicate()
+		hit_info.damage = maxi(1, int(round(float(info.damage) * Weapons.falloff_mult(str(info.falloff_w), origin.distance_to(global_position)))))
 	if body.has_method("receive_attack"):
-		result = str(body.receive_attack(info, thrower if is_instance_valid(thrower) else self))
+		result = str(body.receive_attack(hit_info, thrower if is_instance_valid(thrower) else self))
 	else:
-		result = str(body.take_hit(info, flat, thrower))
+		result = str(body.take_hit(hit_info, flat, thrower))
 	if is_instance_valid(thrower) and thrower.has_method("on_projectile_result"):
 		thrower.on_projectile_result(result, info, body)
 	match result:
@@ -153,21 +168,52 @@ func _strike(body: Node3D, dir: Vector3) -> void:
 			if body is CollisionObject3D:
 				_ray.exclude = _ray.exclude + [(body as CollisionObject3D).get_rid()]
 			global_position += dir * 0.3
-		"blocked", "parried":
+		"parried":
+			Fx.sparks(get_parent(), global_position, -dir, 18, Color(1.0, 0.85, 0.5))
+			if is_instance_valid(thrower) and thrower != body and info.get("ammo", false) and not bool(thrower.get("dead")):
+				_reflect(body)
+			else:
+				_bounce(dir)
+		"blocked":
 			Fx.sparks(get_parent(), global_position, -dir, 14, Color(1.0, 0.85, 0.5))
-			_bounced = true
-			target = null
-			velocity = (-dir * 3.0 + Vector3.UP * 3.5 + Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)) * 1.5)
-			_life = 1.2
+			_bounce(dir)
 		_:
 			Fx.impact(get_parent(), global_position, dir + Vector3.UP * 0.2, Color(0.75, 0.1, 0.08), 8)
 			Audio.play("shuriken_hit", global_position)
 			queue_free()
 
 
+## 막혀서 튕겨 나가 떨어진다
+func _bounce(dir: Vector3) -> void:
+	_bounced = true
+	target = null
+	velocity = (-dir * 3.0 + Vector3.UP * 3.5 + Vector3(randf_range(-1, 1), 0, randf_range(-1, 1)) * 1.5)
+	_life = 1.2
+
+
+## 튕겨내기: 막은 사람의 수리검이 되어 던진 사람에게 되돌아간다 (조금 약하게, 주울 수는 없다)
+func _reflect(by: Node3D) -> void:
+	var back_to := thrower
+	thrower = by
+	target = back_to
+	homing = maxf(homing, 3.0)
+	info = info.duplicate()
+	info.erase("ammo")
+	info.erase("falloff_w")
+	info.damage = maxi(1, int(round(float(info.damage) * 0.7)))
+	info.guard = "normal"
+	origin = global_position
+	velocity = (_aim_point(back_to) - global_position).normalized() * velocity.length() * REFLECT_SPEED
+	_life = LIFE
+	_ray.exclude = [(by as CollisionObject3D).get_rid()] if by is CollisionObject3D else []
+	global_position += velocity.normalized() * 0.3
+	if back_to.has_method("on_incoming_object"):
+		back_to.on_incoming_object(self)
+
+
 func _stick(normal: Vector3) -> void:
 	_stuck = true
-	_life = STUCK_LIFE
+	_life = PICK_LIFE if info.get("ammo", false) else STUCK_LIFE
 	Audio.play("shuriken_stick", global_position, -4.0)
 	Fx.sparks(get_parent(), global_position, normal, 5, Color(1.0, 0.85, 0.5))
 	global_position += normal * 0.02

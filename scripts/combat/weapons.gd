@@ -181,11 +181,15 @@ const WEAPONS := {
 		"ai": {"range": 1.2, "heavy": 1.2, "grab": 0.6, "thrust": 1.4, "overhead": 1.0},
 	},
 	"shuriken": {
-		"name": "수리검", "desc": "Q 로 끝없이 던지고, 길게 누르면 세 장을 부채꼴로 던진다. 붙으면 손에 쥔 칼날로 벤다",
+		"name": "수리검", "desc": "Q 로 던지고, 길게 누르면 세 장을 부채꼴로 던진다. 6장까지 들고, 떨어진 것을 주우면 다시 찬다. 멀리 갈수록 약해진다. 붙으면 손에 쥔 칼날로 벤다",
+		# 들고 있는 수리검 수. 다 던지면 떨어진 것을 줍거나(가까이 지나가기) 천천히 다시 찬다
+		"ammo": 6, "ammo_regen": 4.0,
+		# 멀리서 맞으면 약해진다: falloff[0] m 까지는 그대로, falloff[1] m 에서 falloff[2] 배
+		"falloff": [7.0, 16.0, 0.45],
 		"time": 0.78, "damage": 0.74, "cost": 0.72, "reach": -0.45, "lunge": 1.15,
 		"speed": 1.06, "block_cost": 1.3, "pressure": 0.75, "parry": 1.2, "armor": false,
 		"moves": {
-			# Q = 던지기. 수리검은 끝없이 나온다 (기력만 조금 든다). 찌르기 막기(가운데)로 막는다
+			# Q = 던지기 (한 장 쓴다). 찌르기 막기(가운데)로 막는다. 맞기 직전에 막으면 튕겨 돌려보낸다
 			"heavy": {"windup": 0.09, "active": 0.06, "recover": 0.22, "ai_windup": 0.34, "ai_recover": 0.42,
 					"damage": 7, "cost": 3.0, "reach": 18.0, "lunge": 0.0, "dir": "mid", "react": "flinch",
 					"guard": "normal", "warn": "light", "next": "",
@@ -275,6 +279,19 @@ static var _cache := {}
 
 static func valid(weapon: String) -> String:
 	return weapon if WEAPONS.has(weapon) else "sword"
+
+
+## 던지는 무기가 들고 있을 수 있는 수 (0 이면 던지는 무기가 아니다)
+static func ammo_max(weapon: String) -> int:
+	return int(get_weapon(weapon).get("ammo", 0))
+
+
+## 날아간 거리에 따른 피해 배율
+static func falloff_mult(weapon: String, dist: float) -> float:
+	var f: Array = get_weapon(weapon).get("falloff", [])
+	if f.size() < 3:
+		return 1.0
+	return lerpf(1.0, float(f[2]), clampf((dist - float(f[0])) / (float(f[1]) - float(f[0])), 0.0, 1.0))
 
 
 static func get_weapon(weapon: String) -> Dictionary:
