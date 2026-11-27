@@ -164,12 +164,12 @@ func _quad(ta: Vector3, ba: Vector3, age_a: float, tb: Vector3, bb: Vector3, age
 	var ca := _col(head, tail, age_a, alpha)
 	var cb := _col(head, tail, age_b, alpha)
 	# 날 끝이 지나간 바깥선이 가장 밝다: 바깥 띠(폭의 18%)는 진하게, 안쪽은 손잡이 쪽으로 옅어진다
-	var ea := ta.lerp(ia, 0.18)
-	var eb := tb.lerp(ib, 0.18)
-	var ca_edge := Color(ca.lerp(Color.WHITE, 0.35 * (1.0 - age_a)), minf(ca.a * 1.1, 1.0))
-	var cb_edge := Color(cb.lerp(Color.WHITE, 0.35 * (1.0 - age_b)), minf(cb.a * 1.1, 1.0))
-	var ca_mid := Color(ca, ca.a * 0.55)
-	var cb_mid := Color(cb, cb.a * 0.55)
+	var ea := ta.lerp(ia, 0.25)
+	var eb := tb.lerp(ib, 0.25)
+	var ca_edge := Color(ca, minf(ca.a * 1.25, 1.0))
+	var cb_edge := Color(cb, minf(cb.a * 1.25, 1.0))
+	var ca_mid := Color(ca, ca.a * 0.6)
+	var cb_mid := Color(cb, cb.a * 0.6)
 	var ca_in := Color(ca, 0.0)
 	var cb_in := Color(cb, 0.0)
 	_v(ta, ca_edge); _v(tb, cb_edge); _v(eb, cb_mid)
@@ -179,7 +179,8 @@ func _quad(ta: Vector3, ba: Vector3, age_a: float, tb: Vector3, bb: Vector3, age
 
 
 func _col(head: Color, tail: Color, age: float, alpha: float) -> Color:
-	var c := head.lerp(tail, smoothstep(0.0, 0.5, age))
+	# 밝은 경기장 바닥에서도 보이도록 앞쪽도 바로 색이 들기 시작한다
+	var c := head.lerp(tail, 0.25 + 0.75 * smoothstep(0.0, 0.5, age))
 	c.a = alpha * pow(1.0 - age, 1.3)
 	return c
 
