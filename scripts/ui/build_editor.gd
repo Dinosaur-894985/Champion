@@ -221,14 +221,14 @@ func _refresh() -> void:
 		wb.set_pressed_no_signal(build.weapon == w)
 		wb.modulate = Color(1.0, 0.85, 0.5) if build.weapon == w else Color(1, 1, 1)
 	var wd := Weapons.get_weapon(build.weapon)
-	_weapon_desc.text = "%s\n필살기 (V)  %s: %s" % [wd.desc, wd.special.name, wd.special.desc]
+	_weapon_desc.text = "%s\n필살기 (%s)  %s: %s" % [wd.desc, GameSettings.key_label("special"), wd.special.name, wd.special.desc]
 	for s in _skill_buttons:
 		var b: Button = _skill_buttons[s]
 		b.set_pressed_no_signal(build.has(s))
 		b.modulate = Color(1.0, 0.85, 0.5) if build.has(s) else Color(1, 1, 1)
 	# 실제로 바뀌는 값 미리 보기
 	var keys := []
-	var slot_keys := ["E", "R"]
+	var slot_keys := [GameSettings.key_label("skill1"), GameSettings.key_label("skill2")]
 	for i in build.skills.size():
 		var d: Dictionary = CharacterBuild.SKILLS[build.skills[i]]
 		keys.append("%s %s" % [slot_keys[i] if d.active else "자동", d.name])

@@ -192,8 +192,8 @@ func _on_menu_choice(choice: String) -> void:
 			hud.show_menu("opponent")
 		"presets":
 			hud.show_menu("presets")
-		"sound":
-			hud.show_menu("sound")
+		"settings":
+			hud.open_settings()
 		"back":
 			hud.go_back()
 		"build":
@@ -254,41 +254,9 @@ func _on_knockdown() -> void:
 
 # ---------------- 조작키 ----------------
 
+## 조작키는 설정(scripts/settings/game_settings.gd)에서 등록한다. 키 바꾸기도 거기서.
 func _setup_inputs() -> void:
-	_bind_keys("move_forward", [KEY_W, KEY_UP])
-	_bind_keys("move_back", [KEY_S, KEY_DOWN])
-	_bind_keys("move_left", [KEY_A, KEY_LEFT])
-	_bind_keys("move_right", [KEY_D, KEY_RIGHT])
-	_bind_keys("sprint", [KEY_SHIFT])
-	_bind_keys("jump", [KEY_SPACE])
-	_bind_keys("heavy_attack", [KEY_Q])
-	_bind_keys("skill1", [KEY_E])
-	_bind_keys("skill2", [KEY_R])
-	_bind_keys("grab", [KEY_F])
-	_bind_keys("special", [KEY_V])
-	# 앉기/슬라이딩. 웹에서는 Ctrl+W 가 탭을 닫아 버리므로 C 만 쓴다
-	_bind_keys("crouch", [KEY_C] if OS.has_feature("web") else [KEY_C, KEY_CTRL])
-	_bind_mouse("attack", MOUSE_BUTTON_LEFT)
-	_bind_mouse("block", MOUSE_BUTTON_RIGHT)
-
-
-func _bind_keys(action: String, keys: Array) -> void:
-	if InputMap.has_action(action):
-		return
-	InputMap.add_action(action)
-	for k in keys:
-		var ev := InputEventKey.new()
-		ev.physical_keycode = k
-		InputMap.action_add_event(action, ev)
-
-
-func _bind_mouse(action: String, button: MouseButton) -> void:
-	if InputMap.has_action(action):
-		return
-	InputMap.add_action(action)
-	var ev := InputEventMouseButton.new()
-	ev.button_index = button
-	InputMap.action_add_event(action, ev)
+	GameSettings.apply_startup()
 
 
 # ---------------- 하늘과 빛 ----------------
@@ -346,3 +314,5 @@ func _build_environment() -> void:
 	sun.shadow_blur = 1.2
 	sun.directional_shadow_max_distance = 70.0
 	add_child(sun)
+	# 화질 설정(그림자, 구석 그늘, 빛 번짐, 테두리 매끄럽게)을 적용한다
+	GameSettings.register_world(env, sun)

@@ -58,6 +58,11 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/audio_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee audio.log
           grep -q "AUDIO => OK" audio.log
 
+      - name: 자동 점검 (설정: 마우스 감도, 키 바꾸기, 화질, 저장)
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/settings_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee settings.log
+          grep -q "SETTINGS => OK" settings.log
+
       - name: "자동 점검 (새 무기: 봉, 수리검, 맨몸 격투, 겉모습)"
         run: |
           godot --headless --fixed-fps 60 -s res://tests/new_weapons_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee newweapons.log
