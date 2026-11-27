@@ -19,7 +19,8 @@ const MUSIC_DB := -2.0
 const SFX_DB := -3.0
 
 ## 0~1. 화면의 음량 조절 막대와 같다.
-var volumes := {"Master": 0.85, "Music": 0.75, "SFX": 0.9}
+const DEFAULT_VOLUMES := {"Master": 0.85, "Music": 0.75, "SFX": 0.9}
+var volumes := DEFAULT_VOLUMES.duplicate()
 
 ## 점검용: 지금까지 낸 소리별 횟수
 var counts := {}

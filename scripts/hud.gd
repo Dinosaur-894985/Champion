@@ -6,6 +6,7 @@ signal menu_choice(choice: String)
 const FONT := preload("res://fonts/NanumGothic-Bold.ttf")
 const BUILD_EDITOR := preload("res://scripts/ui/build_editor.gd")
 const DIR_INDICATOR := preload("res://scripts/ui/dir_indicator.gd")
+const SETTINGS_MENU := preload("res://scripts/ui/settings_menu.gd")
 
 ## '뒤로' 를 누르면 돌아갈 메뉴 (start / pause / win / lose)
 var menu_return := "start"
@@ -15,6 +16,8 @@ var _haste_label: Label
 var _enemy_name: Label
 var _enemy_stamina: ProgressBar
 var _editor: Control
+var _settings: Control
+var _fps: Label
 
 var _root: Control
 var _crosshair: Control
@@ -44,6 +47,11 @@ var _damage_flash := 0.0
 var _low_hp := false
 var _mode := "practice"
 var _menu_kind := ""
+
+
+## 조작법. {행동} 자리에는 설정에서 고른 키 이름이 들어간다 (scripts/settings/game_settings.gd)
+const HELP_TEXT := "{move}  이동    {jump}  점프\n{sprint}  달리기 (누르고 있으면 점점 빨라짐)\n{move_left} / {move_right} / {move_back} 두 번 빠르게  그쪽으로 피하기\n{crouch}  앉기 — 달리다 누르면 슬라이딩 (슬라이딩 중 {jump}: 점프)\n벽을 보고 {move_forward} + {jump}  벽 타고 오르기 / 벽 옆을 달리다 {jump}  벽 달리기\n{attack} 연타  연속기 — 이어 누를 때 마우스를 위/아래로 움직이면 갈래가 바뀜\n    옆 네 번: 회전 베기 / 위로 이어: 쪼개기 / 아래로 이어: 꿰뚫기\n달리며 {attack}  달려 찌르기 / 슬라이딩 중 {attack}  다리 베기(넘어뜨림)\n벽을 달리다(벽 차고 뛴 직후) {attack}  벽 차고 베기\n{attack} 길게  차지 베기    {heavy_attack}  내려찍기 (막기를 깨뜨림)\n수리검: {heavy_attack} 던지기 (끝없이) · {attack} 길게 놓으면 세 장 · 맨몸: 주먹과 발차기\n{block}  막기 — 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\n{grab}  잡아 던지기 · 금 간 돌기둥을 쳐서 상대 쪽으로 쓰러뜨리기\n바람 발판을 밟으면 높이 날아오름 → 날아가며 {attack}하면 낙하 찍기\n휘두르기 전 {block}/{grab}/{sprint}  속임수 · 아슬하게 피한 직후 {attack}  반격\n{skill1} / {skill2}  특수 스킬    {special}  무기 필살기    Esc  메뉴"
+const HELP2_TEXT := "높은 곳에서 {attack} (아래를 보며)  낙하 찍기\n공중에서 {attack}  공중 베기\n난간에 매달림  {jump} 올라서기 / {attack} 뛰어올라 베기 / {move_back} 놓기\n공중에서 줄에 닿으면  짚라인 ({jump} 뛰어내리기)\n강한 공격으로 상대를 낭떠러지로 밀어 떨어뜨리기"
 
 
 class Crosshair extends Control:
@@ -186,7 +194,7 @@ func _ready() -> void:
 
 	# 조작법 (왼쪽 위)
 	_help = Label.new()
-	_help.text = "W A S D  이동    Space  점프\nShift  달리기 (누르고 있으면 점점 빨라짐)\nA / D / S 두 번 빠르게  그쪽으로 피하기\nC  앉기 — 달리다 누르면 슬라이딩 (슬라이딩 중 Space: 점프)\n벽을 보고 W + Space  벽 타고 오르기 / 벽 옆을 달리다 Space  벽 달리기\n왼쪽 클릭 연타  연속기 — 이어 누를 때 마우스를 위/아래로 움직이면 갈래가 바뀜\n    옆 네 번: 회전 베기 / 위로 이어: 쪼개기 / 아래로 이어: 꿰뚫기\n달리며 클릭  달려 찌르기 / 슬라이딩 중 클릭  다리 베기(넘어뜨림)\n벽을 달리다(벽 차고 뛴 직후) 클릭  벽 차고 베기\n왼쪽 클릭 길게  차지 베기    Q  내려찍기 (막기를 깨뜨림)\n수리검: Q 던지기 (끝없이) · 왼쪽 클릭 길게 놓으면 세 장 · 맨몸: 주먹과 발차기\n오른쪽 클릭  막기 — 마우스 위/옆/아래로 방향 맞추기 (맞기 직전이면 튕겨내기)\nF  잡아 던지기 · 금 간 돌기둥을 쳐서 상대 쪽으로 쓰러뜨리기\n바람 발판을 밟으면 높이 날아오름 → 날아가며 클릭하면 낙하 찍기\n휘두르기 전 오른쪽 클릭/F/Shift  속임수 · 아슬하게 피한 직후 클릭  반격\nE / R  특수 스킬    V  무기 필살기    Esc  메뉴"
+	_help.text = GameSettings.fill(HELP_TEXT)
 	_help.add_theme_font_size_override("font_size", 15)
 	_help.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
 	_help.add_theme_constant_override("outline_size", 5)   # 밝은 경기장에서도 읽히게
@@ -224,6 +232,14 @@ func _ready() -> void:
 	_big_label.pivot_offset = Vector2(400, 60)
 	_big_label.modulate.a = 0.0
 	_root.add_child(_big_label)
+
+	# 초당 화면 수 (설정에서 켰을 때만, 왼쪽 아래 구석)
+	_fps = Label.new()
+	_fps.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_fps.position = Vector2(24, -36)
+	_fps.add_theme_font_size_override("font_size", 15)
+	_fps.visible = false
+	_root.add_child(_fps)
 
 	_overlay = _make_overlay()
 	_root.add_child(_overlay)
@@ -305,34 +321,6 @@ func _add_button(text: String, choice: String, primary: bool = false, width: int
 	_menu_buttons.add_child(b)
 
 
-## 음량 조절 막대 한 줄: 이름, 막대, 퍼센트
-func _add_volume_row(text: String, bus: String) -> void:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 14)
-	var name_label := Label.new()
-	name_label.text = text
-	name_label.custom_minimum_size = Vector2(110, 0)
-	name_label.add_theme_font_size_override("font_size", 19)
-	row.add_child(name_label)
-	var slider := HSlider.new()
-	slider.min_value = 0.0
-	slider.max_value = 1.0
-	slider.step = 0.05
-	slider.value = Audio.get_volume(bus)
-	slider.custom_minimum_size = Vector2(300, 32)
-	slider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(slider)
-	var pct := Label.new()
-	pct.custom_minimum_size = Vector2(60, 0)
-	pct.add_theme_font_size_override("font_size", 17)
-	pct.text = "%d%%" % roundi(slider.value * 100)
-	row.add_child(pct)
-	slider.value_changed.connect(func(v: float):
-		Audio.set_volume(bus, v)
-		pct.text = "%d%%" % roundi(v * 100))
-	_menu_buttons.add_child(row)
-
-
 ## kind: "start", "pause", "win", "lose", "opponent"(상대 고르기), "presets"(정해진 상대 목록)
 func show_menu(kind: String) -> void:
 	if kind in ["start", "pause", "win", "lose"]:
@@ -348,7 +336,7 @@ func show_menu(kind: String) -> void:
 			_add_button("AI와 대결", "opponent", true)
 			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장 (허수아비)", "practice")
-			_add_button("소리 설정", "sound")
+			_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
 		"pause":
 			_menu_title.text = "일시정지"
 			_menu_sub.text = ("AI와 대결 중" if _mode == "duel" else "연습장") + "\n\n내 캐릭터:  " + my_build
@@ -360,7 +348,7 @@ func show_menu(kind: String) -> void:
 				_add_button("연습장으로", "practice")
 			else:
 				_add_button("AI와 대결", "opponent")
-			_add_button("소리 설정", "sound")
+			_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
 		"win":
 			_menu_title.text = "승리!"
 			_menu_sub.text = "%s을(를) 쓰러뜨렸어요" % _enemy_title
@@ -370,7 +358,7 @@ func show_menu(kind: String) -> void:
 			_add_button("연습장으로", "practice")
 		"lose":
 			_menu_title.text = "패배"
-			_menu_sub.text = "빛나는 칼을 보면 막거나(오른쪽 클릭) 옆으로 피하세요(A 또는 D 두 번 빠르게)"
+			_menu_sub.text = GameSettings.fill("빛나는 칼을 보면 막거나({block}) 옆으로 피하세요({move_left} 또는 {move_right} 두 번 빠르게)")
 			_add_button("다시 대결", "retry", true)
 			_add_button("다른 상대 고르기", "opponent")
 			_add_button("캐릭터 만들기", "build")
@@ -381,13 +369,6 @@ func show_menu(kind: String) -> void:
 			_add_button("랜덤 상대", "vs_random", true)
 			_add_button("정해진 상대 고르기", "presets")
 			_add_button("거울 (내 캐릭터와 똑같은 상대)", "vs_mirror")
-			_add_button("뒤로", "back")
-		"sound":
-			_menu_title.text = "소리 설정"
-			_menu_sub.text = "효과음과 배경음악 크기를 바꿀 수 있어요 (자동 저장)"
-			_add_volume_row("전체", "Master")
-			_add_volume_row("배경음악", "Music")
-			_add_volume_row("효과음", "SFX")
 			_add_button("뒤로", "back")
 		"presets":
 			_menu_title.text = "정해진 상대"
@@ -420,8 +401,6 @@ func cover(seconds: float) -> void:
 
 ## 메뉴에서 '뒤로'
 func go_back() -> void:
-	if _menu_kind == "sound":
-		Audio.save_settings()
 	show_menu("opponent" if _menu_kind == "presets" else menu_return)
 
 
@@ -435,6 +414,34 @@ func open_build_editor(b: CharacterBuild) -> void:
 	_root.add_child(_editor)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_tree().paused = true
+
+
+## 설정 화면을 연다 (시작 화면, 일시정지 메뉴에서)
+func open_settings() -> void:
+	_overlay.visible = false
+	_menu_kind = "settings"
+	_settings = SETTINGS_MENU.new()
+	_settings.closed.connect(_on_settings_closed)
+	_root.add_child(_settings)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_tree().paused = true
+
+
+func _on_settings_closed() -> void:
+	_settings.queue_free()
+	_settings = null
+	refresh_keys()
+	show_menu(menu_return)
+
+
+## 키를 바꾼 뒤 조작법과 스킬 칸의 키 이름을 새로 쓴다
+func refresh_keys() -> void:
+	_help.text = GameSettings.fill(HELP_TEXT)
+	if _help2:
+		_help2.text = GameSettings.fill(HELP2_TEXT)
+		_help2.position = Vector2(0, _help.get_minimum_size().y + 6)
+	if _player:
+		set_player_slots()
 
 
 func _on_editor_finished(saved: bool) -> void:
@@ -464,7 +471,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo and event.physical_keycode == KEY_ESCAPE:
 		if _menu_kind == "build" and _editor:
 			_on_editor_finished(false)
-		elif _menu_kind in ["opponent", "presets", "sound"]:
+		elif _menu_kind == "settings" and _settings:
+			_settings.close_menu()
+		elif _menu_kind in ["opponent", "presets"]:
 			go_back()
 		elif _menu_kind == "pause":
 			hide_menu()
@@ -543,6 +552,12 @@ func set_player(p: Player) -> void:
 	_gauge_bar.value = p.gauge
 	set_gauge(p.gauge, Weapons.GAUGE_MAX)
 	p.gauge_changed.connect(set_gauge)
+	set_player_slots()
+
+
+## 스킬 칸 (이름과 키)
+func set_player_slots() -> void:
+	var p := _player
 	for i in _slots.size():
 		var slot: Dictionary = _slots[i]
 		if i >= p.build.skills.size():
@@ -553,7 +568,7 @@ func set_player(p: Player) -> void:
 		slot.skill = s
 		slot.panel.visible = true
 		slot.name.text = d.name
-		slot.key.text = ["E", "R"][i] if d.active else "자동"
+		slot.key.text = GameSettings.key_label("skill%d" % (i + 1)) if d.active else "자동"
 
 
 func _make_slot(i: int) -> Dictionary:
@@ -664,6 +679,9 @@ func show_big(text: String, color: Color) -> void:
 
 func _process(delta: float) -> void:
 	_update_slots()
+	_fps.visible = GameSettings.show_fps
+	if _fps.visible:
+		_fps.text = "FPS %d" % Engine.get_frames_per_second()
 	# 필살기가 준비되면 게이지가 깜빡인다
 	var glow := 0.5 + 0.5 * sin(Time.get_ticks_msec() / 1000.0 * 8.0) if _gauge_ready else 0.0
 	_gauge_bar.modulate = Color(1, 1, 1).lerp(Color(1.6, 1.4, 0.8), glow)
@@ -712,7 +730,7 @@ func add_vertical_help() -> void:
 	if _help2 != null:
 		return
 	_help2 = Label.new()
-	_help2.text = "높은 곳에서 클릭 (아래를 보며)  낙하 찍기\n공중에서 클릭  공중 베기\n난간에 매달림  Space 올라서기 / 클릭 뛰어올라 베기 / S 놓기\n공중에서 줄에 닿으면  짚라인 (Space 뛰어내리기)\n강한 공격으로 상대를 낭떠러지로 밀어 떨어뜨리기"
+	_help2.text = GameSettings.fill(HELP2_TEXT)
 	_help2.add_theme_font_size_override("font_size", 15)
 	_help2.add_theme_color_override("font_color", Color(1.0, 0.9, 0.7, 0.92))
 	_help2.add_theme_constant_override("outline_size", 5)

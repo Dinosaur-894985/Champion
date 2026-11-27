@@ -218,7 +218,7 @@ func _ready() -> void:
 	head.position.y = 1.62
 	add_child(head)
 	camera = Camera3D.new()
-	camera.fov = 78.0
+	camera.fov = GameSettings.fov
 	camera.near = 0.03
 	camera.current = true
 	head.add_child(camera)
@@ -464,15 +464,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.relative.length() > 300.0:
 			return
 		_flick.add(event.relative)
-		var sens := MOUSE_SENS * (0.6 if sm.state == "charge" else 1.0)
+		var base := MOUSE_SENS * GameSettings.mouse_sens   # 설정의 마우스 감도
+		var sens := base * (0.6 if sm.state == "charge" else 1.0)
 		if blocking:
-			sens = MOUSE_SENS * BLOCK_LOOK_SENS
+			sens = base * BLOCK_LOOK_SENS
 			var d := _flick.dir()
 			if d != "" and d != guard_dir:
 				set_guard(d)
 				_flick.clear()
 		rotate_y(-event.relative.x * sens)
-		head.rotate_x(-event.relative.y * sens)
+		head.rotate_x(-event.relative.y * sens * (-1.0 if GameSettings.invert_y else 1.0))
 		head.rotation.x = clampf(head.rotation.x, deg_to_rad(-88), deg_to_rad(88))
 	elif not controls_enabled:
 		return
@@ -1764,6 +1765,7 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 		target_fov = 78.0 + 6.0 * clampf((horiz - WALK_SPEED) / (SPRINT_SPEED - WALK_SPEED), 0.0, 1.0)
 	if skills.haste_active():
 		target_fov += 4.0
+	target_fov += GameSettings.fov - GameSettings.FOV_DEFAULT   # 설정의 시야 넓이
 	camera.fov = lerpf(camera.fov, target_fov, clampf(delta * 8.0, 0, 1))
 	# 칼도 걸음에 맞춰 살짝 흔들림
 	var tr := Vector3.ZERO
