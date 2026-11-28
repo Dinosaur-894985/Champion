@@ -18,6 +18,8 @@ static var difficulty := ""
 static var arena_choice := ""
 ## 대결 결과를 전적에 남기나 (점검에서 끌 수 있다)
 static var record_results := true
+## 다시 불러온 뒤 처음 화면 대신 열 메뉴 (내 캐릭터를 바꿨을 때 보던 화면으로 돌아가려고)
+static var reopen_menu := ""
 ## 점검용: 정해 두면 저장된 캐릭터 대신 이 캐릭터로 시작한다
 static var test_player_build: CharacterBuild = null
 
@@ -87,6 +89,9 @@ func _ready() -> void:
 		Audio.music("menu")
 	if first_launch:
 		hud.show_menu("start")
+		if reopen_menu != "":
+			hud.show_menu(reopen_menu)
+			reopen_menu = ""
 	else:
 		hud.hide_menu()
 		if mode == "duel":
@@ -300,7 +305,8 @@ func _on_round_end(player_won: bool) -> void:
 	player.controls_enabled = false
 	var rec := {}
 	if record_results:
-		rec = Records.add_result(player.weapon, ai_difficulty(), player_won, round_time)
+		rec = Records.add_result(player.weapon, ai_difficulty(), player_won, round_time,
+				-1 if test_player_build else CharacterBuild.active_slot())
 	hud.result = {"stats": stats.duplicate(), "time": round_time, "record": rec}
 	Audio.ui("ko")
 	Audio.music("", 0.8)
@@ -380,6 +386,22 @@ func _on_menu_choice(choice: String) -> void:
 		set_ai_difficulty(choice.substr(5))
 		hud.show_menu("opponent")
 		return
+	if choice.begins_with("slot_"):
+		# 내 캐릭터 고르기 (처음 화면, 상대 고르기 화면): 저장된 칸이면 그 캐릭터로 바꾸고,
+		# 빈 칸이면 그 칸에 새 캐릭터를 만든다
+		var slot := int(choice.substr(5))
+		if CharacterBuild.load_slot(slot) == null:
+			hud.open_build_editor(player.build, slot)
+			return
+		if slot == CharacterBuild.active_slot() and test_player_build == null:
+			return
+		CharacterBuild.set_active_slot(slot)
+		test_player_build = null
+		if opponent_mode == "mirror":
+			current_opponent = null
+		reopen_menu = "" if hud.menu_kind() == "start" else hud.menu_kind()
+		restart("")
+		return
 	if choice.begins_with("vs_"):
 		# 상대 고르기: vs_random, vs_mirror, vs_preset:이름
 		if choice.begins_with("vs_preset:"):
@@ -405,12 +427,18 @@ func _on_menu_choice(choice: String) -> void:
 		"build":
 			hud.open_build_editor(player.build)
 		"build_saved":
-			# 캐릭터를 바꿨다: 새 캐릭터로 지금 모드를 다시 시작 (처음 화면이었으면 연습장)
+			# 캐릭터를 바꿨다: 새 캐릭터로 다시 불러온다.
+			# 처음 화면(상대 고르기 포함)에서 열었으면 그 화면으로, 싸우던 중이면 그 모드를 다시 시작
+			test_player_build = null
 			if opponent_mode == "mirror":
 				current_opponent = null
-			restart(mode)
+			if next_mode == "":
+				reopen_menu = "" if hud.editor_from == "start" else hud.editor_from
+				restart("")
+			else:
+				restart(mode)
 		"build_cancel":
-			hud.show_menu(hud.menu_return)
+			hud.show_menu(hud.editor_from)
 		"resume":
 			hud.hide_menu()
 		"tut_skip":
