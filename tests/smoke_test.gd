@@ -58,6 +58,8 @@ func _initialize() -> void:
 			_my_weapon = a.substr(7)
 		elif a.begins_with("aiweapon="):
 			_ai_weapon = a.substr(9)
+		elif a.begins_with("diff="):
+			Game.difficulty = a.substr(5)
 		elif a.begins_with("linger="):
 			_linger = int(a.substr(7))
 		elif a.begins_with("mystats="):
@@ -71,6 +73,8 @@ func _initialize() -> void:
 	seed(seed_value)
 	# 매번 같은 결과가 나오도록 상대와 내 캐릭터를 정해 둔다
 	Game.opponent_mode = "preset"
+	if Game.difficulty == "":
+		Game.difficulty = "normal"   # 내 컴퓨터에 저장된 난이도와 상관없이 보통으로 점검
 	Game.opponent_preset = _ai_preset
 	Game.current_opponent = null
 	Game.test_player_build = CharacterBuild.new() if _my_preset == "" else CharacterBuild.preset(_my_preset)
@@ -87,6 +91,7 @@ func _initialize() -> void:
 		_apply_stats(Game.current_opponent, _aistats)
 	_check_build_rules()
 	_check_weapon_table()
+	_check_difficulty()
 	if _only == "duel":
 		_start_duel()
 	elif _only == "parkour":
@@ -926,6 +931,27 @@ func _rps_place(player: Player, ai: Duelist, at: Vector3, gap: float) -> void:
 	ai.rotation.y = PI
 	player.velocity = Vector3.ZERO
 	ai.velocity = Vector3.ZERO
+
+
+# ---------------- AI 난이도 ----------------
+
+## 난이도 표가 쉬움 < 보통 < 어려움 순서인지 (막기, 반응, 휘두르는 빠르기, 피해)
+func _check_difficulty() -> void:
+	var v := {}
+	for d in ["easy", "normal", "hard"]:
+		var ai := Duelist.new()
+		ai.build = CharacterBuild.preset("검객")
+		ai.difficulty = d
+		ai._apply_difficulty()
+		v[d] = [ai.block_chance, -ai.reaction_time, -ai._windup_scale, ai._damage_scale, ai.feint_chance]
+		ai.free()
+	var bad := []
+	for i in v.easy.size():
+		if not (v.easy[i] < v.normal[i] and v.normal[i] < v.hard[i]):
+			bad.append(i)
+	print("DIFFICULTY easy<normal<hard  => %s %s" % ["OK" if bad.is_empty() else "FAIL", bad])
+	if not bad.is_empty():
+		_fail.append("difficulty")
 
 
 # ---------------- 무기와 필살기 ----------------

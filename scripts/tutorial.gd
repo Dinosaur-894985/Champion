@@ -8,7 +8,7 @@ extends Node
 
 signal finished
 
-const SAVE_PATH := "user://progress.cfg"
+const SAVE_PATH := Progress.PATH
 const NEXT_DELAY := 1.1   # 해낸 뒤 다음 단계로 넘어가기까지 (칭찬을 읽을 시간)
 
 ## id, 제목, 안내(키 이름은 {행동} 자리표시), 몇 번 해야 하나, 연습 상대가 공격하나
@@ -61,17 +61,11 @@ var _bar: ProgressBar
 
 
 static func is_done() -> bool:
-	var cfg := ConfigFile.new()
-	if cfg.load(SAVE_PATH) != OK:
-		return false
-	return bool(cfg.get_value("tutorial", "done", false))
+	return bool(Progress.get_value("tutorial", "done", false))
 
 
 static func mark_done() -> void:
-	var cfg := ConfigFile.new()
-	cfg.load(SAVE_PATH)   # 다른 기록이 있으면 지키고 덧붙인다
-	cfg.set_value("tutorial", "done", true)
-	cfg.save(SAVE_PATH)
+	Progress.set_value("tutorial", "done", true)
 
 
 func setup(g: Game, p: Duelist) -> void:

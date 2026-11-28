@@ -44,6 +44,24 @@ var charge_chance := 0.18       # 거리가 벌어졌을 때 차지 베기
 var read_skill := 0.55          # 상대 공격 방향을 보고 맞게 막을 확률 (나머지는 버릇으로 짐작)
 var feint_chance := 0.3         # 공격 준비 중 방향을 바꾸거나 잡기로 바꾸는 속임수
 var grab_chance := 0.35         # 막고 있는 상대에게 다가가 잡기
+## 난이도: Game.ai_difficulty() 가 정한다. "normal"(보통)은 위 기본값 그대로.
+## 쉬움은 굼뜨고 덜 막고 덜 아프게, 어려움은 빨리 읽고 잘 막고 속임수도 자주.
+## read: 공격 방향 읽기 더하기, windup: 휘두르는 준비·회복 시간 배율, damage: 주는 피해 배율,
+## special: 필살기가 차면 쓰는 확률
+const DIFFICULTY := {
+	"easy": {"aggression": 0.48, "block_chance": 0.28, "parry_chance": 0.14, "dodge_chance": 0.08,
+		"reaction_time": 0.2, "counter_chance": 0.35, "combo_chance": 0.35, "charge_chance": 0.12,
+		"feint_chance": 0.1, "grab_chance": 0.18, "read": -0.15, "windup": 1.2, "damage": 0.85, "special": 0.3},
+	"normal": {},
+	"hard": {"aggression": 0.62, "block_chance": 0.58, "parry_chance": 0.42, "dodge_chance": 0.24,
+		"reaction_time": 0.05, "counter_chance": 0.85, "combo_chance": 0.68, "charge_chance": 0.2,
+		"feint_chance": 0.42, "grab_chance": 0.45, "read": 0.15, "windup": 0.88, "damage": 1.1, "special": 0.8},
+}
+const DIFFICULTY_NAMES := {"easy": "쉬움", "normal": "보통", "hard": "어려움"}
+var difficulty := "normal"
+var _windup_scale := 1.0
+var _damage_scale := 1.0
+var _special_chance := 0.55
 ## 튜토리얼 연습 상대: 혼자 판단하지 않고, 다가와 서서 천천히 한 방씩만 휘두른다.
 ## 막거나 피하지 않고, 속임수도 안 쓰고, 쓰러지지도 않는다 (scripts/tutorial.gd 가 조종).
 var tutor := false
@@ -151,6 +169,7 @@ func _ready() -> void:
 	vkit = VerticalKit.new(self)
 	# 기술 능력치가 높을수록 상대 공격 방향을 잘 읽는다
 	read_skill = clampf(0.45 + 0.05 * (float(build.stats.tec) - 5.0), 0.25, 0.8)
+	_apply_difficulty()
 	collision_layer = 2
 	collision_mask = 1
 	var col := CollisionShape3D.new()
@@ -320,7 +339,26 @@ func _style(key: String) -> float:
 
 
 func _atk_mult() -> float:
-	return build.attack_time_mult() * skills.attack_mult()
+	return build.attack_time_mult() * skills.attack_mult() * _windup_scale
+
+
+## 난이도 표(DIFFICULTY)대로 성격 수치를 바꾼다
+func _apply_difficulty() -> void:
+	if tutor or not DIFFICULTY.has(difficulty):
+		return
+	var d: Dictionary = DIFFICULTY[difficulty]
+	for k in d:
+		match k:
+			"read":
+				read_skill = clampf(read_skill + float(d.read), 0.15, 0.9)
+			"windup":
+				_windup_scale = float(d.windup)
+			"damage":
+				_damage_scale = float(d.damage)
+			"special":
+				_special_chance = float(d.special)
+			_:
+				set(k, d[k])
 
 
 func _process(delta: float) -> void:
@@ -1100,7 +1138,7 @@ func _try_hit(data: Dictionary) -> void:
 		return
 	_hit_done = true
 	var info := {
-		"move": _attack, "damage": int(round(float(data.damage) * float(data.get("hits", 1)) * build.damage_mult() * vkit.damage_mult())) + randi_range(-2, 2),
+		"move": _attack, "damage": int(round(float(data.damage) * float(data.get("hits", 1)) * build.damage_mult() * vkit.damage_mult() * _damage_scale)) + randi_range(-2, 2),
 		"power": vkit.powered(),
 		"react": data.react, "guard": data.get("ai_guard", data.guard),
 		"pressure": build.guard_pressure() * Weapons.stat(weapon, "pressure"),
@@ -1144,7 +1182,7 @@ func _try_grab(data: Dictionary) -> void:
 		return
 	_hit_done = true
 	rig.reach = 0.0
-	var info := {"damage": int(round(float(data.damage) * build.damage_mult())), "react": "thrown",
+	var info := {"damage": int(round(float(data.damage) * build.damage_mult() * _damage_scale)), "react": "thrown",
 			"throw": _throw_dir() * float(data.throw_speed) + Vector3.UP * float(data.throw_up)}
 	var result := target.take_grab(info, self)
 	stats["grab_" + result] = stats.get("grab_" + result, 0) + 1
@@ -1828,7 +1866,7 @@ func _plunge_impact() -> void:
 	var dy := to_t.y
 	to_t.y = 0
 	if to_t.length() <= float(data.reach) and absf(dy) < 1.5:
-		var info := {"move": "plunge", "damage": int(round(dmg * build.damage_mult() * vkit.damage_mult())),
+		var info := {"move": "plunge", "damage": int(round(dmg * build.damage_mult() * vkit.damage_mult() * _damage_scale)),
 				"react": data.react, "guard": data.guard, "dir": data.get("dir", "high"),
 				"pressure": build.guard_pressure(), "power": vkit.powered(), "knockdown": true}
 		var result := target.receive_attack(info, self)
@@ -2144,7 +2182,7 @@ func add_gauge(amount: float) -> void:
 
 
 func _try_special() -> bool:
-	if gauge < Weapons.GAUGE_MAX or target.sm.state == "iron" or randf() > 0.55:
+	if gauge < Weapons.GAUGE_MAX or target.sm.state == "iron" or randf() > _special_chance:
 		return false
 	var sp := _mv("special")
 	var ok := false
@@ -2372,7 +2410,7 @@ func _special_multi(data: Dictionary) -> void:
 			_hit_done = false
 			_strike_extra = {}
 			if last:
-				_strike_extra = {"damage": int(round(float(data.last_damage) * build.damage_mult())), "guard": "break",
+				_strike_extra = {"damage": int(round(float(data.last_damage) * build.damage_mult() * _damage_scale)), "guard": "break",
 						"react": "stagger", "knockdown": true, "push": 9.0, "lift": 3.0}
 			rig.set_pose(data.body.strike if i % 2 == 0 else data.body.windup, 45.0)
 			_play(_wsnd("swing_heavy" if last else "swing"), -2.0)

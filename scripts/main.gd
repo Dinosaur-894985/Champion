@@ -12,6 +12,8 @@ static var opponent_mode := "random"
 static var opponent_preset := "검객"
 ## 지금 대결 중인 상대. '다시 대결' 하면 같은 상대가 나온다.
 static var current_opponent: CharacterBuild = null
+## AI 난이도 "easy" / "normal" / "hard". 비어 있으면 기록 파일에서 읽는다 (처음엔 보통)
+static var difficulty := ""
 ## 점검용: 정해 두면 저장된 캐릭터 대신 이 캐릭터로 시작한다
 static var test_player_build: CharacterBuild = null
 
@@ -130,6 +132,7 @@ func _setup_duel() -> void:
 	var ob: CharacterBuild = current_opponent.duplicate_build()
 	ob.contrast_with(player.build)
 	duelist.build = ob
+	duelist.difficulty = ai_difficulty()
 	duelist.position = Vector3(0, 0.1, -6.0)
 	duelist.arena = arena
 	add_child(duelist)
@@ -151,6 +154,21 @@ func _setup_duel() -> void:
 ## 효과(불꽃, 파편, 피해 숫자, 번쩍임)를 시작 전에 한 번씩 몰래 그려 둔다.
 ## 처음 그릴 때 그래픽 준비(셰이더 컴파일)로 화면이 멈칫하는데, 특히 웹에서 심하다.
 ## 그래서 싸우는 도중이 아니라 시작 화면이 가려진 동안 미리 해 둔다.
+## 지금 고른 AI 난이도
+static func ai_difficulty() -> String:
+	if difficulty == "":
+		difficulty = str(Progress.get_value("ai", "difficulty", "normal"))
+		if not Duelist.DIFFICULTY.has(difficulty):
+			difficulty = "normal"
+	return difficulty
+
+
+static func set_ai_difficulty(d: String) -> void:
+	if Duelist.DIFFICULTY.has(d):
+		difficulty = d
+		Progress.set_value("ai", "difficulty", d)
+
+
 ## 모드에 맞는 AI 상대 캐릭터를 만든다
 static func make_opponent(how: String, mine: CharacterBuild) -> CharacterBuild:
 	match how:
@@ -212,6 +230,11 @@ func _on_round_end(player_won: bool) -> void:
 
 
 func _on_menu_choice(choice: String) -> void:
+	if choice.begins_with("diff_"):
+		# 난이도 바꾸기 (상대 고르기 화면): 저장하고 화면을 새로 그린다
+		set_ai_difficulty(choice.substr(5))
+		hud.show_menu("opponent")
+		return
 	if choice.begins_with("vs_"):
 		# 상대 고르기: vs_random, vs_mirror, vs_preset:이름
 		if choice.begins_with("vs_preset:"):
