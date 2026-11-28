@@ -194,6 +194,12 @@ var _tilt := 0.0               # 옆으로 걸을 때 화면이 살짝 기우는
 var _land := 0.0               # 착지할 때 화면이 눌리는 깊이
 var _land_v := 0.0
 var _tremble := 0.0
+# 애니풍 몸놀림 (무기마다 AnimStyle 표): 달리기/공중 자세로 섞이는 정도, 무기 돌리기
+var _run_amt := 0.0
+var _air_amt := 0.0
+var _idle_t := 0.0
+var _pump_off := Vector3.ZERO
+var _flourish_t := -1.0        # 0~1 동안 무기 돌리기 (이중 점프, 바람 발판). 음수면 없음
 
 var head: Node3D
 var camera: Camera3D
@@ -294,6 +300,9 @@ func _build_sword() -> void:
 	camera.add_child(_weapon_root)
 	_weapon_pivot = Node3D.new()
 	_weapon_root.add_child(_weapon_pivot)
+	var rest0 := Weapons.fp_pose(weapon, "rest")
+	_weapon_pivot.rotation = rest0[0] * (PI / 180.0)
+	_weapon_pivot.position = rest0[1]
 	# 1인칭 손: 옷차림에 맞는 장갑과 소매 (캐릭터 색)
 	var hm := Weapons.fp_hand_mats(weapon, build)
 	var opts := {"accent": build.accent(), "skin": build.skin_color(), "glove": hm.glove, "sleeve": hm.sleeve}
@@ -411,8 +420,10 @@ func _update_hands(delta: float) -> void:
 	var rp := _weapon_pivot.rotation
 	var pp := _weapon_pivot.position
 	var mirror := Transform3D(Basis.from_euler(Vector3(rp.x, -rp.y, -rp.z)), Vector3(-pp.x, pp.y, pp.z))
-	var wr := _weapon_root.position - _sway_off
-	_left_root.position = Vector3(-wr.x, wr.y, wr.z) + _sway_off   # 늦게 따라오는 쪽은 두 손이 같다
+	var wr := _weapon_root.position - _sway_off - _pump_off
+	var alt := bool(AnimStyle.val(weapon, "alt", false))
+	# 늦게 따라오는 쪽은 두 손이 같다. 달릴 때 손 흔들기는 두 손이 번갈아 (쌍단검, 맨몸)
+	_left_root.position = Vector3(-wr.x, wr.y, wr.z) + _sway_off + (_pump_off * -1.0 if alt else _pump_off)
 	_left_root.rotation = _weapon_root.rotation
 	if weapon != "fists":
 		_left_pivot.transform = mirror
@@ -586,6 +597,7 @@ func _physics_process(delta: float) -> void:
 			_jump_buffer = 0.0
 			_play("double_jump")
 			Fx.sparks(get_parent(), global_position, Vector3.DOWN, 10, Color(0.85, 0.9, 1.0))
+			_flourish_t = 0.0
 	if _jump_buffer > 0.0 and _coyote > 0.0 and stamina >= JUMP_COST * 0.5:
 		velocity.y = JUMP_VELOCITY
 		_jump_buffer = 0.0
@@ -934,7 +946,8 @@ func _tween_pose(tw: Tween, pose: Array, time: float, trans := Tween.TRANS_SINE,
 
 func _block_enter(_d: Dictionary) -> void:
 	_guard_t = 0.0
-	_pose_to(Weapons.fp_pose(weapon, MoveSet.block_pose(guard_dir)), 0.08)
+	# 막기는 탁 걸리듯 살짝 지나쳤다 돌아온다 (끝 자세는 방향마다 그대로)
+	_pose_to(Weapons.fp_pose(weapon, MoveSet.block_pose(guard_dir)), 0.09, Tween.TRANS_BACK, Tween.EASE_OUT)
 
 
 ## 오른쪽 클릭을 눌렀을 때: 마우스를 움직이던 쪽으로 막는다.
@@ -964,7 +977,7 @@ func set_guard(dir: String) -> void:
 	guard_dir = dir
 	if blocking:
 		_guard_t = 0.0
-		_pose_to(Weapons.fp_pose(weapon, MoveSet.block_pose(guard_dir)), 0.06)
+		_pose_to(Weapons.fp_pose(weapon, MoveSet.block_pose(guard_dir)), 0.07, Tween.TRANS_BACK, Tween.EASE_OUT)
 		if changed_dir:
 			_play("guard_shift")
 	if changed_dir:
@@ -1243,7 +1256,9 @@ func _attack_enter(d: Dictionary) -> void:
 		velocity.y = float(data.hop)   # 쪼개기: 살짝 뛰어올라 내리찍는다
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
-	_tween_pose(_weapon_tween, data.fp.windup, _windup_total,
+	# 애니풍: 준비 자세를 무기마다 조금 더 크게 당긴다 (시간은 그대로)
+	var wind := AnimStyle.anticipate(weapon, data.fp.windup, Weapons.fp_pose(weapon, "rest"))
+	_tween_pose(_weapon_tween, wind, _windup_total,
 			Tween.TRANS_BACK if _move in ["heavy", "cleave", "spin"] else Tween.TRANS_SINE)
 	attack_started.emit(_move)
 
@@ -1274,7 +1289,7 @@ func _attack_update(delta: float) -> void:
 			if sm.state == "attack" and _attack_timer <= 0.0:
 				_attack_phase = "recover"
 				_attack_timer = data.recover * _atk_mult()
-				_tween_back(data.recover * _atk_mult())
+				_tween_back(data.recover * _atk_mult(), data)
 		"recover":
 			if _queued == "" and _can_act() and Input.is_action_pressed("block") and _can_block_cancel():
 				sm.go("block")   # 막기를 누르고 있으면 회복 동작 후반을 끊고 막는다
@@ -1321,12 +1336,14 @@ func _enter_active(data: Dictionary) -> void:
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
 	var ease_type := Tween.EASE_IN if _move in ["heavy", "cleave"] else Tween.EASE_OUT
+	# 빠른 무기는 휙 하고 끝까지 단숨에 (EXPO), 무거운 무기는 묵직하게 (CUBIC)
+	var snap := Tween.TRANS_EXPO if AnimStyle.val(weapon, "snap", "cubic") == "expo" else Tween.TRANS_CUBIC
 	if data.fp.has("mid"):
 		# 칼이 곧게 가지 않고 몸 앞을 크게 돌아 지나간다 (곡선)
 		_tween_pose(_weapon_tween, data.fp.mid, data.active * 0.42, Tween.TRANS_SINE, Tween.EASE_IN)
-		_tween_pose(_weapon_tween, data.fp.strike, data.active * 0.58, Tween.TRANS_CUBIC, Tween.EASE_OUT)
+		_tween_pose(_weapon_tween, data.fp.strike, data.active * 0.58, snap, Tween.EASE_OUT)
 	else:
-		_tween_pose(_weapon_tween, data.fp.strike, data.active, Tween.TRANS_CUBIC, ease_type)
+		_tween_pose(_weapon_tween, data.fp.strike, data.active, snap if ease_type == Tween.EASE_OUT else Tween.TRANS_CUBIC, ease_type)
 	_swing_feel(data)
 	if data.has("finisher") and _combo_step >= 3:
 		combat_event.emit("%d연속 · %s!" % [_combo_step, data.finisher], Color(1.0, 0.85, 0.45))
@@ -1351,10 +1368,17 @@ func _swing_feel(data: Dictionary) -> void:
 		_roll = deg_to_rad(10.0) * signf(float(data.fp.strike[0].y))
 
 
-func _tween_back(time: float) -> void:
+func _tween_back(time: float, data := {}) -> void:
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
-	_tween_pose(_weapon_tween, Weapons.fp_pose(weapon, "rest"), time, Tween.TRANS_SINE, Tween.EASE_IN_OUT)
+	var rest := Weapons.fp_pose(weapon, "rest")
+	if data.has("fp") and not data.has("projectile") and not str(data.get("limb", "")).begins_with("kick"):
+		# 애니풍: 휘두른 뒤 그 방향으로 조금 더 흘러갔다가 자세를 되찾는다
+		var fp: Dictionary = data.fp
+		_tween_pose(_weapon_tween, AnimStyle.follow_through(weapon, fp.windup, fp.strike), time * 0.26, Tween.TRANS_SINE, Tween.EASE_OUT)
+		_tween_pose(_weapon_tween, rest, time * 0.74, Tween.TRANS_BACK, Tween.EASE_OUT)
+		return
+	_tween_pose(_weapon_tween, rest, time, Tween.TRANS_SINE, Tween.EASE_IN_OUT)
 
 
 # ---------------- 잡기 (F) ----------------
@@ -1514,6 +1538,7 @@ func launch(vel: Vector3) -> void:
 	vkit.reset_fall()
 	_kick.x += deg_to_rad(4.0)
 	_shake = maxf(_shake, 0.2)
+	_flourish_t = 0.0
 	combat_event.emit("바람을 타고 날아오른다!", Color(0.6, 1.0, 0.95))
 
 
@@ -1911,9 +1936,56 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 		var t := Time.get_ticks_msec() * 0.06
 		tr = Vector3(sin(t * 1.3), sin(t * 1.9), 0) * _tremble * 0.006
 	var sw := _sway * motion
-	_sway_off = Vector3(-sw.x * 0.35, sw.y * 0.3, 0) + Vector3(0, _land * motion * 0.35, 0)
-	_weapon_root.position = _rest_pos() + Vector3(bob.x * 0.5, -bob.y * 0.6, 0) + tr + _sway_off
-	_weapon_root.rotation = Vector3(sw.y * 0.8, sw.x * 1.0, -_tilt * 1.5)
+	var st := AnimStyle.get_style(weapon)
+	_sway_off = Vector3(-sw.x * 0.35, sw.y * 0.3, 0) + Vector3(0, _land * motion * 0.35 * float(st.land), 0)
+	var style := _style_layer(delta, on_floor, sprinting, horiz, st)
+	_weapon_root.position = _rest_pos() + Vector3(bob.x * 0.5, -bob.y * 0.6, 0) + tr + _sway_off + style[1]
+	_weapon_root.rotation = Vector3(sw.y * 0.8, sw.x * 1.0, -_tilt * 1.5) + style[0]
+
+
+## 애니풍 몸놀림 (무기마다 AnimStyle 표): 서 있을 때 숨쉬기, 달릴 때 무기를 젖히고 손 흔들기,
+## 공중에서 무기 들기, 이중 점프 때 무기 돌리기. 무기 기준점에 더할 [회전(라디안), 위치] 를 돌려준다.
+## 공격/막기 자세(_weapon_pivot)는 건드리지 않아서 판정과 방향 읽기는 그대로다.
+func _style_layer(delta: float, on_floor: bool, sprinting: bool, horiz: float, st: Dictionary) -> Array:
+	var free := sm.state == "free" and not blocking
+	var run_goal := 1.0 if (free and on_floor and sprinting and horiz > WALK_SPEED * 0.9) else 0.0
+	var air_goal := 1.0 if (free and not on_floor and not _flying) or (_flying and free) else 0.0
+	_run_amt = lerpf(_run_amt, run_goal, clampf(delta * (7.0 if run_goal > _run_amt else 11.0), 0, 1))
+	_air_amt = lerpf(_air_amt, air_goal, clampf(delta * (6.0 if air_goal > _air_amt else 12.0), 0, 1))
+	var still := 1.0 - clampf(horiz / WALK_SPEED, 0.0, 1.0)
+	_idle_t += delta
+	var idle: Array = st.idle
+	var ia := float(idle[0]) * (still if free else 0.0)
+	var f := float(idle[1])
+	var rot := Vector3.ZERO
+	var pos := Vector3(sin(_idle_t * f * 0.5) * ia * 0.6, sin(_idle_t * f) * ia, 0)
+	var run: Array = st.fp_run
+	var air: Array = st.fp_air
+	rot += run[0] * (PI / 180.0) * _run_amt + air[0] * (PI / 180.0) * _air_amt
+	pos += run[1] * _run_amt + air[1] * _air_amt
+	# 달릴 때 손이 걸음에 맞춰 앞뒤로 (두 손 쓰는 무기는 같이, 쌍단검/맨몸은 번갈아)
+	_pump_off = Vector3(0, absf(cos(_bob_t * 0.5)) * 0.4, sin(_bob_t * 0.5)) * float(st.pump) * _run_amt
+	pos += _pump_off
+	if _flourish_t >= 0.0:
+		_flourish_t += delta / 0.5
+		var t := clampf(_flourish_t, 0.0, 1.0)
+		var e := 1.0 - pow(1.0 - t, 3.0)
+		var lift := sin(t * PI)
+		match str(st.flourish):
+			"twirl":
+				rot.z += -TAU * e        # 화면 안에서 한 바퀴 빙글
+				pos.y += lift * 0.05
+			"flip":
+				rot.x += TAU * e         # 손목을 돌려 칼을 앞으로 한 바퀴
+				pos.y += lift * 0.06
+			"heave":
+				rot.x -= lift * 0.7      # 큰 칼을 번쩍 들어올렸다 내린다
+				pos.y += lift * 0.1
+			_:
+				pos.y += lift * 0.07
+		if _flourish_t >= 1.0 or not free:
+			_flourish_t = -1.0
+	return [rot, pos]
 
 
 # ---------------- 특수 스킬 ----------------
