@@ -1,6 +1,7 @@
 extends SceneTree
 ## 경기장 사진 찍기 (눈으로 확인용).
-## 실행: godot -s res://tests/arena_shots.gd -- shots=폴더
+## 실행: godot -s res://tests/arena_shots.gd -- shots=폴더 [arena=garden]
+## 자리는 하늘 경기장 기준. 노을 정원은 경기장과 같이 돌려서 같은 곳을 찍는다.
 ## 자리: [이름, 위치, 몸 방향(도), 고개(도)]
 
 const GAME := preload("res://scenes/main.tscn")
@@ -28,6 +29,8 @@ func _initialize() -> void:
 	for a in OS.get_cmdline_user_args():
 		if a.begins_with("shots="):
 			_dir = a.substr(6)
+		elif a.begins_with("arena="):
+			Game.arena_choice = a.substr(6)
 	Game.next_mode = "practice"
 	_game = GAME.instantiate()
 	root.add_child(_game)
@@ -44,9 +47,9 @@ func _process(_delta: float) -> bool:
 			return false
 		var s: Array = SPOTS[_i]
 		var p: Player = _game.player
-		p.global_position = s[1]
+		p.global_position = _game.arena.place(s[1])
 		p.velocity = Vector3.ZERO
-		p.rotation.y = deg_to_rad(s[2])
+		p.rotation.y = _game.arena.yaw(deg_to_rad(s[2]))
 		p.head.rotation.x = deg_to_rad(s[3])
 	if _frame > 20 and _frame % 15 == 12 and _i < SPOTS.size():
 		_save(SPOTS[_i][0])

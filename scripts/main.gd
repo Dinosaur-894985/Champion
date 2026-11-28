@@ -14,6 +14,8 @@ static var opponent_preset := "검객"
 static var current_opponent: CharacterBuild = null
 ## AI 난이도 "easy" / "normal" / "hard". 비어 있으면 기록 파일에서 읽는다 (처음엔 보통)
 static var difficulty := ""
+## 경기장: "sky" / "garden" / "random". 비어 있으면 기록 파일에서 읽는다 (처음엔 하늘 경기장)
+static var arena_choice := ""
 ## 대결 결과를 전적에 남기나 (점검에서 끌 수 있다)
 static var record_results := true
 ## 점검용: 정해 두면 저장된 캐릭터 대신 이 캐릭터로 시작한다
@@ -44,8 +46,10 @@ var _cine_to := Vector3.ZERO
 func _ready() -> void:
 	Engine.time_scale = 1.0
 	_setup_inputs()
-	_build_environment()
+	var theme := arena_theme()
+	_build_environment(theme)
 	arena = Arena.new()
+	arena.theme = theme
 	add_child(arena)
 
 	var first_launch := next_mode == ""
@@ -90,7 +94,8 @@ func _ready() -> void:
 
 
 func _setup_practice() -> void:
-	player.position = Vector3(0, 0.1, 7.5)
+	player.position = arena.place(Vector3(0, 0.1, 7.5))
+	player.rotation.y = arena.yaw(0.0)
 	hud.set_mode("practice")
 	_spawn_dummies()
 	hud.set_stats(hits, knockdowns)
@@ -100,8 +105,8 @@ func _spawn_dummies() -> void:
 	for i in 3:
 		var d := TrainingDummy.new()
 		var x := (i - 1) * 3.2
-		d.position = Vector3(x, 0.1, -1.0 - absf(i - 1) * 1.2)
-		d.rotation.y = -x * 0.12
+		d.position = arena.place(Vector3(x, 0.1, -1.0 - absf(i - 1) * 1.2))
+		d.rotation.y = arena.yaw(-x * 0.12)
 		add_child(d)
 		d.hit_taken.connect(_on_hit)
 		d.knocked_down.connect(_on_knockdown)
@@ -109,7 +114,8 @@ func _spawn_dummies() -> void:
 
 ## 튜토리얼: 허수아비로 이동·공격을 배우고, 연습 상대(천천히 공격함)로 막기·피하기·필살기를 배운다
 func _setup_tutorial() -> void:
-	player.position = Vector3(0, 0.1, 7.5)
+	player.position = arena.place(Vector3(0, 0.1, 7.5))
+	player.rotation.y = arena.yaw(0.0)
 	hud.set_mode("tutorial")
 	_spawn_dummies()
 	# 연습 상대는 처음엔 옆에서 기다리다가 막기 단계에서 다가온다
@@ -118,7 +124,7 @@ func _setup_tutorial() -> void:
 	b.contrast_with(player.build)
 	duelist.build = b
 	duelist.tutor = true
-	duelist.position = Vector3(5.5, 0.1, 2.5)
+	duelist.position = arena.place(Vector3(5.5, 0.1, 2.5))
 	var look := player.position - duelist.position
 	duelist.rotation.y = atan2(-look.x, -look.z)
 	duelist.arena = arena
@@ -136,7 +142,8 @@ func _setup_tutorial() -> void:
 
 
 func _setup_duel() -> void:
-	player.position = Vector3(0, 0.1, 6.0)
+	player.position = arena.place(Vector3(0, 0.1, 6.0))
+	player.rotation.y = arena.yaw(0.0)
 	hud.set_mode("duel")
 	duelist = Duelist.new()
 	if current_opponent == null:
@@ -146,7 +153,8 @@ func _setup_duel() -> void:
 	ob.contrast_with(player.build)
 	duelist.build = ob
 	duelist.difficulty = ai_difficulty()
-	duelist.position = Vector3(0, 0.1, -6.0)
+	duelist.position = arena.place(Vector3(0, 0.1, -6.0))
+	duelist.rotation.y = arena.yaw(PI)
 	duelist.arena = arena
 	add_child(duelist)
 	duelist.target = player
@@ -185,6 +193,32 @@ func _setup_duel() -> void:
 ## 효과(불꽃, 파편, 피해 숫자, 번쩍임)를 시작 전에 한 번씩 몰래 그려 둔다.
 ## 처음 그릴 때 그래픽 준비(셰이더 컴파일)로 화면이 멈칫하는데, 특히 웹에서 심하다.
 ## 그래서 싸우는 도중이 아니라 시작 화면이 가려진 동안 미리 해 둔다.
+## 고른 경기장 ("random" 포함)
+static func get_arena_choice() -> String:
+	if arena_choice == "":
+		arena_choice = str(Progress.get_value("arena", "choice", "sky"))
+		if not (Arena.THEMES.has(arena_choice) or arena_choice == "random"):
+			arena_choice = "sky"
+	return arena_choice
+
+
+static func set_arena_choice(c: String) -> void:
+	if Arena.THEMES.has(c) or c == "random":
+		arena_choice = c
+		Progress.set_value("arena", "choice", c)
+
+
+## 이번 판 경기장 (랜덤이면 하나를 고른다. 같은 판을 '다시 대결'하면 같은 곳)
+static var _random_pick := ""
+static func arena_theme() -> String:
+	var c := get_arena_choice()
+	if c != "random":
+		return c
+	if _random_pick == "":
+		_random_pick = Arena.THEME_ORDER.pick_random()
+	return _random_pick
+
+
 ## 지금 고른 AI 난이도
 static func ai_difficulty() -> String:
 	if difficulty == "":
@@ -337,6 +371,10 @@ func _cine_update() -> void:
 
 
 func _on_menu_choice(choice: String) -> void:
+	if choice.begins_with("arena_"):
+		set_arena_choice(choice.substr(6))
+		hud.show_menu("opponent")
+		return
 	if choice.begins_with("diff_"):
 		# 난이도 바꾸기 (상대 고르기 화면): 저장하고 화면을 새로 그린다
 		set_ai_difficulty(choice.substr(5))
@@ -350,6 +388,7 @@ func _on_menu_choice(choice: String) -> void:
 		else:
 			opponent_mode = choice.substr(3)
 		current_opponent = null
+		_random_pick = ""   # 새 상대: 랜덤 경기장도 새로 고른다
 		restart("duel")
 		return
 	match choice:
@@ -434,12 +473,13 @@ func _setup_inputs() -> void:
 
 # ---------------- 하늘과 빛 ----------------
 
-func _build_environment() -> void:
+func _build_environment(theme: String) -> void:
+	var e: Dictionary = Arena.ENV.get(theme, Arena.ENV.sky)
 	var sky_mat := ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color = Color(0.30, 0.58, 0.90)
-	sky_mat.sky_horizon_color = Color(0.86, 0.90, 0.93)
-	sky_mat.ground_horizon_color = Color(0.80, 0.82, 0.78)
-	sky_mat.ground_bottom_color = Color(0.45, 0.52, 0.40)
+	sky_mat.sky_top_color = e.top
+	sky_mat.sky_horizon_color = e.horizon
+	sky_mat.ground_horizon_color = e.ground_h
+	sky_mat.ground_bottom_color = e.ground_b
 	sky_mat.sun_angle_max = 20.0
 	var sky := Sky.new()
 	sky.sky_material = sky_mat
@@ -450,7 +490,7 @@ func _build_environment() -> void:
 	# 주변광은 하늘색을 반만 섞고 나머지는 따뜻한 흰빛 → 밝은 바닥이 파랗게 물들지 않는다
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
 	env.ambient_light_sky_contribution = 0.45
-	env.ambient_light_color = Color(0.86, 0.84, 0.80)
+	env.ambient_light_color = e.ambient
 	env.ambient_light_energy = 0.7
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	env.tonemap_exposure = 0.85
@@ -461,11 +501,11 @@ func _build_environment() -> void:
 	env.glow_intensity = 0.35
 	env.glow_bloom = 0.05
 	env.fog_enabled = true
-	env.fog_light_color = Color(0.84, 0.88, 0.93)
-	env.fog_density = 0.004
+	env.fog_light_color = e.fog
+	env.fog_density = e.fog_density
 	env.fog_aerial_perspective = 0.4
 	env.adjustment_enabled = true
-	env.adjustment_saturation = 1.08
+	env.adjustment_saturation = e.saturation
 
 	# 웹(호환 렌더러)에서는 같은 설정이 더 밝고 물빠져 보여서 조금 눌러 준다
 	var compat: bool = RenderingServer.get_rendering_device() == null   # 웹, 또는 그래픽 카드가 오래돼 호환 모드로 켜진 경우
@@ -474,15 +514,19 @@ func _build_environment() -> void:
 		env.ambient_light_energy = 0.5
 		env.adjustment_saturation = 1.2
 		env.adjustment_contrast = 1.08
+		if theme == "garden":
+			# 노을 정원은 하늘이 파랗게 튀고 바닥이 하얗게 날아가서 더 눌러 준다
+			env.tonemap_exposure = 0.54
+			env.adjustment_saturation = 1.06
 
 	var world_env := WorldEnvironment.new()
 	world_env.environment = env
 	add_child(world_env)
 
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-52, -30, 0)
-	sun.light_color = Color(1.0, 0.94, 0.84)
-	sun.light_energy = 0.75 if compat else 1.0
+	sun.rotation_degrees = e.sun_rot
+	sun.light_color = e.sun
+	sun.light_energy = (0.75 if compat else 1.0) * float(e.sun_energy)
 	sun.shadow_enabled = true
 	sun.shadow_blur = 1.2
 	sun.directional_shadow_max_distance = 70.0

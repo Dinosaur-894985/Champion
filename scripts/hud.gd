@@ -407,6 +407,7 @@ func show_menu(kind: String) -> void:
 			_menu_title.text = "상대 고르기"
 			_menu_sub.text = "AI 도 나와 같은 규칙(점수 %d점, 스킬 2개)으로 만들어져요" % CharacterBuild.POINTS
 			_add_difficulty_row()
+			_add_arena_row()
 			_add_button("랜덤 상대", "vs_random", true)
 			_add_button("정해진 상대 고르기", "presets")
 			_add_button("거울 (내 캐릭터와 똑같은 상대)", "vs_mirror")
@@ -434,32 +435,49 @@ const DIFFICULTY_INFO := {
 }
 
 
-## 상대 고르기 화면 맨 위: 쉬움 / 보통 / 어려움 (고른 것이 밝게)
-func _add_difficulty_row() -> void:
-	var now := Game.ai_difficulty()
+## 상대 고르기 화면: 경기장 고르기 (고른 것이 밝게)
+func _add_arena_row() -> void:
+	var items := []
+	for t in Arena.THEME_ORDER:
+		items.append([Arena.theme_name(t), "arena_" + t, t])
+	items.append(["랜덤", "arena_random", "random"])
+	_choice_row("경기장", items, Game.get_arena_choice(), 128)
+
+
+## [글자, 고르면 보낼 것, 값] 버튼 줄. now 와 값이 같은 버튼이 밝다.
+func _choice_row(title: String, items: Array, now: String, width: int) -> void:
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 8)
 	var head := Label.new()
-	head.text = "난이도"
+	head.text = title
 	head.add_theme_font_size_override("font_size", 17)
 	head.custom_minimum_size = Vector2(70, 0)
 	row.add_child(head)
-	for d in ["easy", "normal", "hard"]:
+	for it in items:
 		var b := Button.new()
-		b.text = Duelist.DIFFICULTY_NAMES[d]
-		b.custom_minimum_size = Vector2(88, 40)
+		b.text = it[0]
+		b.custom_minimum_size = Vector2(width, 40)
 		b.add_theme_font_size_override("font_size", 17)
 		b.toggle_mode = true
-		b.button_pressed = d == now
-		if d == now:
-			b.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
-			b.add_theme_color_override("font_pressed_color", Color(1.0, 0.85, 0.4))
-			b.add_theme_color_override("font_hover_pressed_color", Color(1.0, 0.85, 0.4))
-		b.pressed.connect(func(): menu_choice.emit("diff_" + d))
+		b.button_pressed = it[2] == now
+		if it[2] == now:
+			for k in ["font_color", "font_pressed_color", "font_hover_pressed_color"]:
+				b.add_theme_color_override(k, Color(1.0, 0.85, 0.4))
+		var choice: String = it[1]
+		b.pressed.connect(func(): menu_choice.emit(choice))
 		b.set_meta("sfx", "ui_click")
 		row.add_child(b)
 	_menu_buttons.add_child(row)
+
+
+## 상대 고르기 화면 맨 위: 쉬움 / 보통 / 어려움 (고른 것이 밝게)
+func _add_difficulty_row() -> void:
+	var now := Game.ai_difficulty()
+	var items := []
+	for d in ["easy", "normal", "hard"]:
+		items.append([Duelist.DIFFICULTY_NAMES[d], "diff_" + d, d])
+	_choice_row("난이도", items, now, 88)
 	var info := Label.new()
 	info.text = DIFFICULTY_INFO[now]
 	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
