@@ -78,6 +78,11 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/tutorial_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee tutorial.log
           grep -q "TUTORIAL => OK" tutorial.log
 
+      - name: "자동 점검 (승리 연출과 전적)"
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/result_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee results.log
+          grep -q "RESULTS => OK" results.log
+
       - name: Windows 실행 파일 만들기
         run: |
           mkdir -p build/windows
