@@ -60,6 +60,8 @@ static var fullscreen := false
 static var show_fps := false
 ## 휘두를 때 남는 빛 자취(검기). 끄면 자취 없이 칼만 보인다 (맞는 순간 멈춤은 그대로)
 static var trails := true
+## 화면 흔들림: 걸을 때 흔들림, 착지 눌림, 옆걸음 기울기, 손이 늦게 따라오기. 멀미가 나면 끈다
+static var view_motion := true
 ## 행동 이름 -> ["key:87", "mouse:1", ...]. 비어 있으면 기본 키.
 static var bindings := {}
 
@@ -84,6 +86,7 @@ static func ensure_loaded() -> void:
 	fullscreen = bool(cfg.get_value("graphics", "fullscreen", false))
 	show_fps = bool(cfg.get_value("graphics", "show_fps", false))
 	trails = bool(cfg.get_value("graphics", "trails", true))
+	view_motion = bool(cfg.get_value("graphics", "view_motion", true))
 	bindings = {}
 	if cfg.has_section("keys"):
 		for a in cfg.get_section_keys("keys"):
@@ -107,6 +110,7 @@ static func save() -> void:
 	cfg.set_value("graphics", "fullscreen", fullscreen)
 	cfg.set_value("graphics", "show_fps", show_fps)
 	cfg.set_value("graphics", "trails", trails)
+	cfg.set_value("graphics", "view_motion", view_motion)
 	if cfg.has_section("keys"):
 		cfg.erase_section("keys")
 	for a in bindings:

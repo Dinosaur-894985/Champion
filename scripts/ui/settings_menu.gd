@@ -255,6 +255,7 @@ func _build_graphics() -> void:
 			GameSettings.fullscreen = on
 			GameSettings.apply_window())
 	_check_row("휘두를 때 빛 자취 (검기)", GameSettings.trails, func(on: bool): GameSettings.trails = on)
+	_check_row("화면 흔들림 (걷기·착지·손 따라오기)", GameSettings.view_motion, func(on: bool): GameSettings.view_motion = on)
 	_check_row("초당 화면 수(FPS) 보기", GameSettings.show_fps, func(on: bool): GameSettings.show_fps = on)
 	var tip := _label("게임이 끊기면 화질을 낮춰 보세요. FPS 가 60 근처면 부드러운 거예요.", 16)
 	tip.modulate = C_DIM
@@ -303,6 +304,7 @@ func _reset_tab() -> void:
 			GameSettings.quality = "high"
 			GameSettings.show_fps = false
 			GameSettings.trails = true
+			GameSettings.view_motion = true
 			if GameSettings.fullscreen:
 				GameSettings.fullscreen = false
 				GameSettings.apply_window()

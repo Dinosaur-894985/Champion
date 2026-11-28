@@ -28,6 +28,7 @@ const DASH_COST := 16.0
 const STAMINA_REGEN := 30.0
 const REGEN_DELAY := 0.8
 const BLOCK_COST := {"flinch": 12.0, "stagger": 26.0}
+const HALF_BLOCK := 0.5        # 방향이 틀린 막기: 피해 절반 (플레이어와 같은 규칙)
 const RUN_SPEED := 7.2          # 달려들 때 (플레이어 달리기와 비슷하게)
 const SLIDE_SPEED := 8.5        # 미끄러져 들어올 때
 
@@ -1082,8 +1083,11 @@ func _try_hit(data: Dictionary) -> void:
 			_stagger(0.75 * Weapons.stat_or(target.weapon, "parry_stun", 1.0))
 			combat_event.emit("반격 기회!", Color(0.55, 0.85, 1.0))
 		"blocked":
-			_push = -_dir * 3.0
+			# 완벽 막기를 당했다: 칼이 튕겨 잠깐 휘청한다
+			_push = -_dir * float(MoveSet.REACTIONS.recoil.push) * 2.0
 			_combo_left = 0
+			if _attack != "special":
+				_stagger(MoveSet.REACTIONS.recoil.time, false)
 		"dodged":
 			_dodged_by_target += 1
 		"guard_broken", "hit", "wrong_guard":
@@ -1241,13 +1245,24 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 	var facing_attacker := facing.normalized().dot(-dir) > 0.2
 	if state == "block" and facing_attacker and info.guard != "unblockable" \
 			and not AttackDir.blocks(guard_dir, info.get("dir", "")):
-		# 막는 방향이 틀렸다: 빈 곳을 베였다
-		combat_event.emit("빈 곳을 베었다!", Color(1.0, 0.85, 0.4))
+		# 막는 방향이 틀렸다: 반만 막는다 (피해 절반, 큰 공격이면 살짝 움찔)
 		stats["wrong_guard"] = stats.get("wrong_guard", 0) + 1
-		_apply_damage(damage, dir, big)
-		if not dead:
-			_stagger(MoveSet.REACTIONS.stagger.time if big else MoveSet.REACTIONS.flinch.time, big)
-		return "hit"
+		spend_stamina(float(BLOCK_COST.get(info.react, 12.0)) * float(info.get("pressure", 1.0)) * Weapons.stat(weapon, "block_cost"))
+		if info.guard == "break" or stamina <= 0.0:
+			_play("guard_break")
+			combat_event.emit("가드 깨기!", Color(1.0, 0.75, 0.3))
+			_apply_damage(damage / 2, dir, true)
+			if not dead:
+				_stagger(MoveSet.REACTIONS.guard_break.time)
+			return "hit"
+		_play(_wsnd("clash"), -4.0)
+		_push = dir * (3.0 if big else 1.5)
+		_apply_damage(int(ceilf(damage * HALF_BLOCK)), dir, false)
+		if not dead and big:
+			_stagger(MoveSet.REACTIONS.flinch.time, false)
+		elif not dead:
+			sm.time = 0.0   # 계속 막고 있는다
+		return "wrong_guard"
 	if state == "block" and facing_attacker and info.guard != "unblockable":
 		var parry := parry_chance * (1.0 + 0.12 * (float(build.stats.tec) - 5.0)) * Weapons.stat(weapon, "parry")
 		if _state_t < 0.3 and randf() < parry:
