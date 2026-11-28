@@ -2,7 +2,8 @@ extends ColorRect
 ## 캐릭터 만들기 화면: 무기를 고르고, 점수를 능력치 5개에 나눠 주고, 특수 스킬을 2개까지 고른다.
 ## 오른쪽에는 내 결투사가 빙글 돌며 보인다. 색, 피부, 머리 모양, 그리고 부위마다 옷(머리, 몸통, 팔, 다리, 신발)을
 ## 무기와 따로 고를 수 있다 (점수를 먹지 않는다). 몸집은 힘/체력/민첩을 따라 바뀐다.
-## 저장하면 user://build.cfg 에 남아서 다음에 켜도 그대로다.
+## 캐릭터는 3칸까지 저장한다 (맨 위 칸 버튼). 칸마다 이름을 붙이고, 저장하면 그 칸이 '지금 쓰는 캐릭터'가 된다.
+## 저장하면 user://build.cfg 에 남아서 다음에 켜도 그대로다 (웹은 브라우저 저장소).
 
 signal finished(saved: bool)
 
@@ -25,10 +26,34 @@ var _rig_key := ""
 var _look_buttons := {}   # "color"/"skin"/"hair" → [Button]
 var _part_labels := {}    # 부위 → Label (지금 고른 모양 이름)
 var _set_i := 0
+var _slot := 0
+var _drafts := {}          # 칸 → 고치던 캐릭터 (칸을 옮겨 다녀도 저장 전까지 남는다)
+var _saved: Array = []     # 칸 → 저장된 캐릭터 또는 null
+var _slot_buttons: Array[Button] = []
+var _name_edit: LineEdit
+var _delete_button: Button
+var _delete_armed := false
+var _roster_changed := false   # 칸을 지웠다 → 닫을 때 새로 불러와야 한다
 
 
-func setup(b: CharacterBuild) -> void:
-	build = b.duplicate_build()
+## slot: 처음 열 칸 (-1 이면 지금 쓰는 칸)
+func setup(b: CharacterBuild, slot := -1) -> void:
+	_saved = CharacterBuild.load_all_slots()
+	_slot = slot if slot >= 0 else CharacterBuild.active_slot()
+	if _saved[_slot]:
+		build = (_saved[_slot] as CharacterBuild).duplicate_build()
+	elif slot < 0:
+		build = b.duplicate_build()   # 아직 아무것도 저장 안 함: 지금 쓰는 기본 캐릭터
+		build.name = CharacterBuild.default_name(_slot)
+	else:
+		build = _fresh(_slot)
+
+
+func _fresh(slot: int) -> CharacterBuild:
+	var b := CharacterBuild.new()
+	b.name = CharacterBuild.default_name(slot)
+	b.color = slot * 3 % CharacterBuild.COLORS.size()   # 새 칸은 색을 달리해 알아보기 쉽게
+	return b
 
 
 func _ready() -> void:
@@ -49,6 +74,7 @@ func _ready() -> void:
 	var title := _label("캐릭터 만들기", 44)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	box.add_child(title)
+	box.add_child(_slot_row())
 	var sub := _label("점수 %d점을 능력치와 특수 스킬에 나눠 쓰세요. 하나를 올리면 다른 게 약해져요." % CharacterBuild.POINTS, 17)
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.modulate = C_TEXT_DIM
@@ -127,7 +153,9 @@ func _ready() -> void:
 	buttons.add_child(_button("저장하고 시작", _on_save, true))
 	buttons.add_child(_button("랜덤", _on_random))
 	buttons.add_child(_button("처음 값으로", _on_reset))
-	buttons.add_child(_button("취소", func(): finished.emit(false)))
+	_delete_button = _button("이 칸 지우기", _on_delete)
+	buttons.add_child(_delete_button)
+	buttons.add_child(_button("취소", func(): finished.emit(_roster_changed)))
 	box.add_child(buttons)
 	_refresh()
 
@@ -187,24 +215,122 @@ func _on_skill(s: String) -> void:
 
 
 func _on_random() -> void:
+	var nm := build.name
 	build = CharacterBuild.random_build()
-	build.name = "나"
+	build.name = nm
 	_refresh()
 
 
 func _on_reset() -> void:
+	var nm := build.name
 	build = CharacterBuild.new()
+	build.name = nm
 	_refresh()
 
 
 func _on_save() -> void:
 	if not build.is_valid():
 		return
-	build.save()
+	build.save_to_slot(_slot)
 	finished.emit(true)
 
 
+# ---------------- 저장 칸 ----------------
+
+## 맨 위: 칸 1 / 2 / 3 버튼
+func _slot_row() -> Control:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	for i in CharacterBuild.SLOTS:
+		var b := Button.new()
+		b.toggle_mode = true
+		b.focus_mode = Control.FOCUS_NONE
+		b.custom_minimum_size = Vector2(250, 46)
+		b.add_theme_font_size_override("font_size", 18)
+		b.pressed.connect(_on_slot.bind(i))
+		row.add_child(b)
+		_slot_buttons.append(b)
+	return row
+
+
+func _on_slot(i: int) -> void:
+	if i == _slot:
+		_refresh()
+		return
+	_drafts[_slot] = build
+	_slot = i
+	if _drafts.has(i):
+		build = _drafts[i]
+	elif _saved[i]:
+		build = (_saved[i] as CharacterBuild).duplicate_build()
+	else:
+		build = _fresh(i)
+	_delete_armed = false
+	_rig_key = ""
+	_refresh()
+
+
+func _on_name(text: String) -> void:
+	build.name = text
+
+
+## 두 번 눌러야 지운다 (실수 막기)
+func _on_delete() -> void:
+	if not _delete_armed:
+		_delete_armed = true
+		_refresh()
+		return
+	_delete_armed = false
+	if CharacterBuild.delete_slot(_slot):
+		_roster_changed = true
+		_saved = CharacterBuild.load_all_slots()
+		_drafts.erase(_slot)
+		build = _fresh(_slot)
+		_rig_key = ""
+	_refresh()
+
+
+func _saved_count() -> int:
+	var n := 0
+	for b in _saved:
+		if b:
+			n += 1
+	return n
+
+
+func _refresh_slots() -> void:
+	var active := CharacterBuild.active_slot()
+	for i in _slot_buttons.size():
+		var b: Button = _slot_buttons[i]
+		var nm: String
+		if i == _slot:
+			nm = build.name if build.name.strip_edges() != "" else CharacterBuild.default_name(i)
+		elif _drafts.has(i):
+			nm = (_drafts[i] as CharacterBuild).name
+		elif _saved[i]:
+			nm = (_saved[i] as CharacterBuild).name
+		else:
+			nm = "빈 칸"
+		var tag := ""
+		if _saved[i] and i == active:
+			tag = "  ·  쓰는 중"
+		elif _saved[i] == null and (i == _slot or _drafts.has(i)):
+			tag = "  ·  저장 전"
+		b.text = "%d   %s%s" % [i + 1, nm, tag]
+		b.set_pressed_no_signal(i == _slot)
+		b.modulate = Color(1.0, 0.85, 0.5) if i == _slot else (Color(1, 1, 1) if _saved[i] else Color(1, 1, 1, 0.6))
+	if _name_edit and _name_edit.text != build.name:
+		_name_edit.text = build.name
+	if _delete_button:
+		var can := _saved[_slot] != null and _saved_count() > 1
+		_delete_button.disabled = not can
+		_delete_button.text = "정말 지울까요?" if _delete_armed and can else "이 칸 지우기"
+		_delete_button.modulate = Color(1.0, 0.55, 0.5) if _delete_armed and can else Color(1, 1, 1)
+
+
 func _refresh() -> void:
+	_refresh_slots()
 	var left := build.remaining()
 	_points.text = "남은 점수  %d" % left
 	_points.modulate = C_ON if left > 0 else Color(0.7, 0.9, 0.7)
@@ -245,6 +371,19 @@ func _make_preview() -> Control:
 	var col := VBoxContainer.new()
 	col.custom_minimum_size = Vector2(300, 0)
 	col.add_theme_constant_override("separation", 8)
+	var name_row := HBoxContainer.new()
+	name_row.add_theme_constant_override("separation", 6)
+	name_row.add_child(_label("이름", 17))
+	_name_edit = LineEdit.new()
+	_name_edit.max_length = CharacterBuild.NAME_MAX
+	_name_edit.placeholder_text = "이름을 지어 주세요"
+	_name_edit.custom_minimum_size = Vector2(250, 38)
+	_name_edit.add_theme_font_size_override("font_size", 18)
+	_name_edit.text = build.name
+	_name_edit.text_changed.connect(_on_name)
+	_name_edit.text_changed.connect(func(_t): _refresh_slots())
+	name_row.add_child(_name_edit)
+	col.add_child(name_row)
 	var svc := SubViewportContainer.new()
 	svc.stretch = true
 	svc.custom_minimum_size = Vector2(300, 330)
@@ -276,7 +415,7 @@ func _make_preview() -> Control:
 	cam.fov = 34
 	cam.position = Vector3(0, 1.1, 5.0)
 	_vp.add_child(cam)
-	cam.look_at(Vector3(0, 0.92, 0))
+	cam.look_at_from_position(cam.position, Vector3(0, 0.92, 0))
 	LowPoly.part(_vp_root(), LowPoly.cyl(0.62, 0.68, 0.08, 10), LowPoly.mat(Color(0.25, 0.27, 0.32), 0.7), Vector3(0, -0.04, 0))
 	_turntable = Node3D.new()
 	_turntable.rotation.y = PI + 0.5

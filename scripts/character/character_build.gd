@@ -105,7 +105,7 @@ const SKINS := [Color(0.96, 0.8, 0.66), Color(0.87, 0.67, 0.5), Color(0.66, 0.46
 const HAIRS := ["짧은 머리", "묶은 머리", "뻗친 머리", "민머리"]
 const HAIR_COLORS := [Color(0.1, 0.08, 0.07), Color(0.35, 0.2, 0.1), Color(0.75, 0.6, 0.35), Color(0.55, 0.55, 0.58)]
 
-var name := "나"
+var name := "캐릭터 1"
 var weapon := "sword"
 var stats := {"str": 5, "vit": 5, "agi": 5, "tec": 5, "end": 5}
 var skills: Array = ["wall", "double_jump"]
@@ -366,43 +366,169 @@ static func preset(preset_name: String) -> CharacterBuild:
 	return b
 
 
+# ---------------- 저장 칸 (캐릭터 3개) ----------------
+# user://build.cfg 한 파일에 [slot0] [slot1] [slot2] 칸과 [roster] active(지금 쓰는 칸)를 둔다.
+# 예전 파일([build] [look] 한 캐릭터)은 읽을 때 1번 칸으로 옮긴다. 웹에서는 브라우저 저장소에 남는다.
+
+const SLOTS := 3
+const NAME_MAX := 10
+
+
+static func default_name(slot: int) -> String:
+	return "캐릭터 %d" % (slot + 1)
+
+
+## 지금 쓰는 칸에 저장한다
 func save() -> void:
-	var cfg := ConfigFile.new()
-	cfg.set_value("build", "weapon", weapon)
-	cfg.set_value("build", "stats", stats)
-	cfg.set_value("build", "skills", skills)
-	cfg.set_value("look", "color", color)
-	cfg.set_value("look", "skin", skin)
-	cfg.set_value("look", "hair", hair)
-	cfg.set_value("look", "parts", parts)
+	save_to_slot(active_slot())
+
+
+## 이 칸에 저장하고, 이 칸을 지금 쓰는 캐릭터로 정한다
+func save_to_slot(slot: int) -> void:
+	slot = clampi(slot, 0, SLOTS - 1)
+	var cfg := _open()
+	var sec := "slot%d" % slot
+	var nm := clean_name(name)
+	cfg.set_value(sec, "name", nm if nm != "" else default_name(slot))
+	cfg.set_value(sec, "weapon", weapon)
+	cfg.set_value(sec, "stats", stats)
+	cfg.set_value(sec, "skills", skills)
+	cfg.set_value(sec, "color", color)
+	cfg.set_value(sec, "skin", skin)
+	cfg.set_value(sec, "hair", hair)
+	cfg.set_value(sec, "parts", parts)
+	cfg.set_value("roster", "active", slot)
 	cfg.save(SAVE_PATH)
 
 
-## 저장된 내 캐릭터. 없거나 규칙에 안 맞으면 기본 캐릭터.
-static func load_saved() -> CharacterBuild:
-	var b := CharacterBuild.new()
+## 이름 다듬기: 앞뒤 빈칸과 줄바꿈을 없애고 NAME_MAX 글자까지
+static func clean_name(s: String) -> String:
+	return s.replace("\n", " ").strip_edges().left(NAME_MAX)
+
+
+## 저장 파일을 연다. 예전 한 캐릭터 파일이면 1번 칸으로 옮긴다.
+static func _open() -> ConfigFile:
 	var cfg := ConfigFile.new()
-	if cfg.load(SAVE_PATH) != OK:
-		return b
-	var st = cfg.get_value("build", "stats", {})
-	var sk = cfg.get_value("build", "skills", [])
-	if st is Dictionary and sk is Array:
-		var cand := CharacterBuild.new()
-		cand.weapon = Weapons.valid(str(cfg.get_value("build", "weapon", "sword")))
-		for k in STAT_ORDER:
-			cand.stats[k] = int(st.get(k, 5))
-		cand.skills = []
-		for s in sk:
-			if SKILLS.has(s) and not (s in cand.skills):
-				cand.skills.append(s)
-		cand.color = clampi(int(cfg.get_value("look", "color", 0)), 0, COLORS.size() - 1)
-		cand.skin = clampi(int(cfg.get_value("look", "skin", 1)), 0, SKINS.size() - 1)
-		cand.hair = clampi(int(cfg.get_value("look", "hair", 0)), 0, HAIRS.size() - 1)
-		var pt = cfg.get_value("look", "parts", {})
-		if pt is Dictionary:
-			for p in PART_ORDER:
-				if str(pt.get(p, "")) in STYLE_ORDER:
-					cand.parts[p] = str(pt[p])
-		if cand.is_valid():
-			return cand
+	cfg.load(SAVE_PATH)
+	if cfg.has_section("build"):
+		if not cfg.has_section("slot0"):
+			var old := _read(cfg, "build", "look")
+			if old:
+				old.name = default_name(0)
+				cfg.set_value("slot0", "name", old.name)
+				cfg.set_value("slot0", "weapon", old.weapon)
+				cfg.set_value("slot0", "stats", old.stats)
+				cfg.set_value("slot0", "skills", old.skills)
+				cfg.set_value("slot0", "color", old.color)
+				cfg.set_value("slot0", "skin", old.skin)
+				cfg.set_value("slot0", "hair", old.hair)
+				cfg.set_value("slot0", "parts", old.parts)
+		cfg.erase_section("build")
+		if cfg.has_section("look"):
+			cfg.erase_section("look")
+	return cfg
+
+
+## 칸 하나를 읽는다. 없거나 규칙에 안 맞으면 null
+static func _read(cfg: ConfigFile, sec: String, look_sec: String) -> CharacterBuild:
+	if not cfg.has_section(sec):
+		return null
+	var st = cfg.get_value(sec, "stats", {})
+	var sk = cfg.get_value(sec, "skills", [])
+	if not (st is Dictionary and sk is Array):
+		return null
+	var cand := CharacterBuild.new()
+	cand.name = clean_name(str(cfg.get_value(sec, "name", "")))
+	cand.weapon = Weapons.valid(str(cfg.get_value(sec, "weapon", "sword")))
+	for k in STAT_ORDER:
+		cand.stats[k] = int(st.get(k, 5))
+	cand.skills = []
+	for s in sk:
+		if SKILLS.has(s) and not (s in cand.skills) and cand.skills.size() < MAX_SKILLS:
+			cand.skills.append(s)
+	cand.color = clampi(int(cfg.get_value(look_sec, "color", 0)), 0, COLORS.size() - 1)
+	cand.skin = clampi(int(cfg.get_value(look_sec, "skin", 1)), 0, SKINS.size() - 1)
+	cand.hair = clampi(int(cfg.get_value(look_sec, "hair", 0)), 0, HAIRS.size() - 1)
+	var pt = cfg.get_value(look_sec, "parts", {})
+	if pt is Dictionary:
+		for p in PART_ORDER:
+			if str(pt.get(p, "")) in STYLE_ORDER:
+				cand.parts[p] = str(pt[p])
+	return cand if cand.is_valid() else null
+
+
+## 저장된 칸의 캐릭터. 빈 칸이면 null
+static func load_slot(slot: int) -> CharacterBuild:
+	if slot < 0 or slot >= SLOTS:
+		return null
+	var b := _read(_open(), "slot%d" % slot, "slot%d" % slot)
+	if b and b.name == "":
+		b.name = default_name(slot)
+	return b
+
+
+## 칸마다 저장된 캐릭터 (빈 칸은 null) — 메뉴에 보여 줄 때 쓴다
+static func load_all_slots() -> Array:
+	var cfg := _open()
+	var out := []
+	for i in SLOTS:
+		var b := _read(cfg, "slot%d" % i, "slot%d" % i)
+		if b and b.name == "":
+			b.name = default_name(i)
+		out.append(b)
+	return out
+
+
+## 지금 쓰는 칸. 그 칸이 비었으면 저장된 첫 칸, 아무것도 없으면 0
+static func active_slot() -> int:
+	var cfg := _open()
+	var a := clampi(int(cfg.get_value("roster", "active", 0)), 0, SLOTS - 1)
+	if _read(cfg, "slot%d" % a, "slot%d" % a):
+		return a
+	for i in SLOTS:
+		if _read(cfg, "slot%d" % i, "slot%d" % i):
+			return i
+	return 0
+
+
+## 저장된 칸을 지금 쓰는 캐릭터로 정한다. 빈 칸이면 false
+static func set_active_slot(slot: int) -> bool:
+	var cfg := _open()
+	if slot < 0 or slot >= SLOTS or _read(cfg, "slot%d" % slot, "slot%d" % slot) == null:
+		return false
+	cfg.set_value("roster", "active", slot)
+	cfg.save(SAVE_PATH)
+	return true
+
+
+## 칸을 지운다. 마지막 남은 캐릭터는 지우지 않는다 (false). 지운 칸의 전적도 지운다.
+static func delete_slot(slot: int) -> bool:
+	var cfg := _open()
+	var sec := "slot%d" % slot
+	if slot < 0 or slot >= SLOTS or not cfg.has_section(sec):
+		return false
+	var filled := 0
+	for i in SLOTS:
+		if cfg.has_section("slot%d" % i):
+			filled += 1
+	if filled <= 1:
+		return false
+	cfg.erase_section(sec)
+	if int(cfg.get_value("roster", "active", 0)) == slot:
+		for i in SLOTS:
+			if cfg.has_section("slot%d" % i):
+				cfg.set_value("roster", "active", i)
+				break
+	cfg.save(SAVE_PATH)
+	Records.forget_character(slot)
+	return true
+
+
+## 지금 쓰는 내 캐릭터. 아무것도 저장 안 했으면 기본 캐릭터.
+static func load_saved() -> CharacterBuild:
+	var slot := active_slot()
+	var b := load_slot(slot)
+	if b == null:
+		b = CharacterBuild.new()
+		b.name = default_name(slot)
 	return b
