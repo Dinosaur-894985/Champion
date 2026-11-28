@@ -374,6 +374,8 @@ func show_menu(kind: String) -> void:
 		"win":
 			_menu_title.text = "승리!"
 			_menu_sub.text = "%s을(를) 쓰러뜨렸어요" % _enemy_title
+			if Game.ai_difficulty() != "hard":
+				_menu_sub.text += "\n이번엔 '%s'에 도전해 볼까요? (다른 상대 고르기 → 난이도)" % Duelist.DIFFICULTY_NAMES["hard" if Game.ai_difficulty() == "normal" else "normal"]
 			_add_button("다시 대결", "retry", true)
 			_add_button("다른 상대 고르기", "opponent")
 			_add_button("캐릭터 만들기", "build")
@@ -381,6 +383,8 @@ func show_menu(kind: String) -> void:
 		"lose":
 			_menu_title.text = "패배"
 			_menu_sub.text = GameSettings.fill("빛나는 칼을 보면 막거나({block}) 옆으로 피하세요({move_left} 또는 {move_right} 두 번 빠르게)")
+			if Game.ai_difficulty() != "easy":
+				_menu_sub.text += "\n너무 어렵다면 난이도를 낮춰 보세요 (다른 상대 고르기 → 난이도)"
 			_add_button("다시 대결", "retry", true)
 			_add_button("다른 상대 고르기", "opponent")
 			_add_button("캐릭터 만들기", "build")
@@ -395,6 +399,7 @@ func show_menu(kind: String) -> void:
 		"opponent":
 			_menu_title.text = "상대 고르기"
 			_menu_sub.text = "AI 도 나와 같은 규칙(점수 %d점, 스킬 2개)으로 만들어져요" % CharacterBuild.POINTS
+			_add_difficulty_row()
 			_add_button("랜덤 상대", "vs_random", true)
 			_add_button("정해진 상대 고르기", "presets")
 			_add_button("거울 (내 캐릭터와 똑같은 상대)", "vs_mirror")
@@ -413,6 +418,50 @@ func show_menu(kind: String) -> void:
 	get_tree().paused = true
 	if kind == "pause":
 		Audio.duck(true)
+
+
+const DIFFICULTY_INFO := {
+	"easy": "쉬움 · 느리게 휘두르고 잘 안 막아요. 처음 연습할 때",
+	"normal": "보통 · 막고, 피하고, 버릇을 읽어요",
+	"hard": "어려움 · 빨리 읽고 잘 막고, 속임수도 자주 써요",
+}
+
+
+## 상대 고르기 화면 맨 위: 쉬움 / 보통 / 어려움 (고른 것이 밝게)
+func _add_difficulty_row() -> void:
+	var now := Game.ai_difficulty()
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 8)
+	var head := Label.new()
+	head.text = "난이도"
+	head.add_theme_font_size_override("font_size", 17)
+	head.custom_minimum_size = Vector2(70, 0)
+	row.add_child(head)
+	for d in ["easy", "normal", "hard"]:
+		var b := Button.new()
+		b.text = Duelist.DIFFICULTY_NAMES[d]
+		b.custom_minimum_size = Vector2(88, 40)
+		b.add_theme_font_size_override("font_size", 17)
+		b.toggle_mode = true
+		b.button_pressed = d == now
+		if d == now:
+			b.add_theme_color_override("font_color", Color(1.0, 0.85, 0.4))
+			b.add_theme_color_override("font_pressed_color", Color(1.0, 0.85, 0.4))
+			b.add_theme_color_override("font_hover_pressed_color", Color(1.0, 0.85, 0.4))
+		b.pressed.connect(func(): menu_choice.emit("diff_" + d))
+		b.set_meta("sfx", "ui_click")
+		row.add_child(b)
+	_menu_buttons.add_child(row)
+	var info := Label.new()
+	info.text = DIFFICULTY_INFO[now]
+	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	info.add_theme_font_size_override("font_size", 15)
+	info.add_theme_color_override("font_color", Color(1, 1, 1, 0.7))
+	_menu_buttons.add_child(info)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(0, 6)
+	_menu_buttons.add_child(gap)
 
 
 ## 잠깐 화면을 검게 가린다 (그 사이 효과를 미리 그려 둠).
@@ -573,7 +622,7 @@ func set_enemy(b: CharacterBuild) -> void:
 	var sk := []
 	for s in b.skills:
 		sk.append(CharacterBuild.SKILLS[s].name)
-	_enemy_name.text = b.name + "   ·   " + Weapons.display_name(b.weapon) + ("   ·   " + ", ".join(sk) if not sk.is_empty() else "")
+	_enemy_name.text = b.name + "   ·   " + Duelist.DIFFICULTY_NAMES.get(Game.ai_difficulty(), "") + "   ·   " + Weapons.display_name(b.weapon) + ("   ·   " + ", ".join(sk) if not sk.is_empty() else "")
 	set_enemy_hp(b.max_hp(), b.max_hp())
 	_enemy_bar.value = b.max_hp()
 	set_enemy_stamina(b.max_stamina(), b.max_stamina())
