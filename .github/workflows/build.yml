@@ -88,6 +88,11 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/result_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee results.log
           grep -q "RESULTS => OK" results.log
 
+      - name: "자동 점검 (캐릭터 3개 저장)"
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/roster_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee roster.log
+          grep -q "ROSTER => OK" roster.log
+
       - name: Windows 실행 파일 만들기
         run: |
           mkdir -p build/windows

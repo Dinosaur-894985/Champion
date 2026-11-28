@@ -341,7 +341,8 @@ func show_menu(kind: String) -> void:
 	match kind:
 		"start":
 			_menu_title.text = "챔피언"
-			_menu_sub.text = "1대1 칼싸움\n\n내 캐릭터:  " + my_build
+			_menu_sub.text = "1대1 칼싸움"
+			_add_character_row()
 			var first_time := not Tutorial.is_done()
 			if first_time:
 				# 처음 하는 사람: 튜토리얼을 맨 위에, 눈에 띄게
@@ -351,7 +352,7 @@ func show_menu(kind: String) -> void:
 			_add_button("연습장 (허수아비)", "practice")
 			if not first_time:
 				_add_button("튜토리얼 (조작 배우기)", "tutorial")
-			_add_button("전적 (무기별 승률)", "records")
+			_add_button("전적 (캐릭터 · 무기별 승률)", "records")
 			_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
 		"pause":
 			_menu_title.text = "일시정지"
@@ -406,6 +407,7 @@ func show_menu(kind: String) -> void:
 		"opponent":
 			_menu_title.text = "상대 고르기"
 			_menu_sub.text = "AI 도 나와 같은 규칙(점수 %d점, 스킬 2개)으로 만들어져요" % CharacterBuild.POINTS
+			_add_character_row()
 			_add_difficulty_row()
 			_add_arena_row()
 			_add_button("랜덤 상대", "vs_random", true)
@@ -435,6 +437,26 @@ const DIFFICULTY_INFO := {
 }
 
 
+## 내 캐릭터 고르기: 저장 칸 3개 (지금 쓰는 칸이 밝게, 빈 칸은 '+ 새로 만들기') + 고른 캐릭터 요약
+func _add_character_row() -> void:
+	var slots := CharacterBuild.load_all_slots()
+	var now := str(CharacterBuild.active_slot()) if Game.test_player_build == null else ""
+	var items := []
+	for i in slots.size():
+		var b: CharacterBuild = slots[i]
+		items.append([b.name if b else "+ 새로 만들기", "slot_%d" % i, str(i)])
+	_choice_row("내 캐릭터", items, now, 170)
+	var info := Label.new()
+	info.text = _player.build.summary() if _player else ""
+	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	info.add_theme_font_size_override("font_size", 15)
+	info.add_theme_color_override("font_color", Color(0.75, 0.9, 1.0))
+	_menu_buttons.add_child(info)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(0, 6)
+	_menu_buttons.add_child(gap)
+
+
 ## 상대 고르기 화면: 경기장 고르기 (고른 것이 밝게)
 func _add_arena_row() -> void:
 	var items := []
@@ -452,7 +474,7 @@ func _choice_row(title: String, items: Array, now: String, width: int) -> void:
 	var head := Label.new()
 	head.text = title
 	head.add_theme_font_size_override("font_size", 17)
-	head.custom_minimum_size = Vector2(70, 0)
+	head.custom_minimum_size = Vector2(80, 0)
 	row.add_child(head)
 	for it in items:
 		var b := Button.new()
@@ -528,6 +550,8 @@ func _add_result_panel(won: bool) -> void:
 	var rec: Dictionary = result.get("record", {})
 	if not rec.is_empty():
 		var parts := ["%s 전적  %s" % [Weapons.display_name(_player.weapon) if _player else "", Records.line(rec.weapon)]]
+		if not (rec.get("char", []) as Array).is_empty() and _player:
+			parts.push_front("%s  %s" % [_player.build.name, Records.line(rec.char)])
 		if won and int(rec.streak) >= 2:
 			parts.append("%d연승!" % rec.streak)
 		if won and rec.new_fastest:
@@ -563,6 +587,17 @@ func _add_records() -> void:
 	grid.columns = 3
 	grid.add_theme_constant_override("h_separation", 16)
 	grid.add_theme_constant_override("v_separation", 6)
+	var slots := CharacterBuild.load_all_slots()
+	var any_char := false
+	for i in slots.size():
+		if slots[i]:
+			any_char = true
+			_record_row(grid, "%s · %s" % [slots[i].name, Weapons.display_name(slots[i].weapon)], r.chars.get(str(i), [0, 0]))
+	if any_char:
+		for i in 3:
+			var gap0 := Control.new()
+			gap0.custom_minimum_size = Vector2(0, 10)
+			grid.add_child(gap0)
 	for w in Weapons.ORDER:
 		_record_row(grid, Weapons.display_name(w), r.weapons.get(w, [0, 0]))
 	for i in 3:
@@ -679,12 +714,21 @@ func go_back() -> void:
 	show_menu("opponent" if _menu_kind == "presets" else menu_return)
 
 
-## 캐릭터 만들기 화면을 연다
-func open_build_editor(b: CharacterBuild) -> void:
+## 캐릭터 만들기 화면을 어느 메뉴에서 열었나 (닫으면 그리로 돌아간다)
+var editor_from := "start"
+
+
+func menu_kind() -> String:
+	return _menu_kind
+
+
+## 캐릭터 만들기 화면을 연다. slot: 고칠 저장 칸 (-1 이면 지금 쓰는 칸)
+func open_build_editor(b: CharacterBuild, slot := -1) -> void:
+	editor_from = _menu_kind if _menu_kind != "" else menu_return
 	_overlay.visible = false
 	_menu_kind = "build"
 	_editor = BUILD_EDITOR.new()
-	_editor.setup(b)
+	_editor.setup(b, slot)
 	_editor.finished.connect(_on_editor_finished)
 	_root.add_child(_editor)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
