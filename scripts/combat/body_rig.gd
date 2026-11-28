@@ -76,6 +76,15 @@ var leg_kick := 0.0
 var kick_style := "kick"
 var _leg_kick_amt := 0.0
 var frozen := false              # 쓰러진 뒤에는 움직임을 멈춘다
+## 애니풍 몸놀림 (AnimStyle 표). 공중에 떠 있는지와 위아래 빠르기는 몸 주인(Duelist)이 알려 준다
+var airborne := false
+var vy := 0.0
+var _neutral := true             # 지금 서 있는 자세(공격/막기 아님)인가
+var _air_amt := 0.0
+var _run_amt := 0.0
+var _stance_amt := 1.0
+var _flip_t := -1.0              # 0~1 동안 공중제비. 음수면 없음
+var _flip_turns := 1.0
 var _t := 0.0
 var _flap_sway := Vector3.ZERO
 
@@ -100,6 +109,16 @@ func set_pose(pose: Array, speed: float = 12.0, hand: String = "") -> void:
 	_hand = hand
 	_pose_speed = speed
 	var p := pose
+	var st := AnimStyle.get_style(weapon)
+	_neutral = pose == MoveSet.BODY_POSES.guard
+	if _neutral and not (st.guard as Array).is_empty():
+		p = st.guard   # 무기마다 다른 애니풍 기본 자세
+	elif not _neutral and not MoveSet.BODY_POSES.values().has(pose):
+		# 공격 자세: 허리 비틀기와 숙이기를 더 크게 (팔 방향은 그대로라 공격 방향은 똑같이 읽힌다)
+		p = pose.duplicate()
+		var amp := float(st.amp)
+		p[2] = float(p[2]) * amp
+		p[3] = float(p[3]) * lerpf(1.0, amp, 0.6)
 	if weapon == "fists" and p.size() < 5:
 		p = _fist_stance(p)
 		if hand == "":
@@ -165,7 +184,11 @@ func animate(delta: float, local_vel: Vector3) -> void:
 	if speed > 0.05:
 		fwd_part = -local_vel.z / speed
 		side_part = local_vel.x / speed
-	var swing := sin(_walk_phase) * amt * 0.6
+	var st := AnimStyle.get_style(weapon)
+	_run_amt = lerpf(_run_amt, clampf((speed - 4.6) / 2.0, 0.0, 1.0), clampf(delta * 6.0, 0, 1))
+	_air_amt = lerpf(_air_amt, 1.0 if airborne else 0.0, clampf(delta * (10.0 if airborne else 16.0), 0, 1))
+	# 달리면 다리를 더 크게 휘두르고 무릎을 높이 든다
+	var swing := sin(_walk_phase) * amt * lerpf(0.6, 0.95, _run_amt)
 	_dash_amt = maxf(_dash_amt - delta * 4.0, 0.0)
 	var d := _dash_amt * _dash_amt
 	var fa := absf(fwd_part)
@@ -175,8 +198,28 @@ func animate(delta: float, local_vel: Vector3) -> void:
 	_leg_l.rotation.z = -step - d * 0.35
 	_leg_r.rotation.z = step + d * 0.35
 	# 발을 들 때 무릎이 굽는다
-	_knee_l.rotation.x = -maxf(0.0, sin(_walk_phase + 0.9)) * amt * 0.9 - 0.06
-	_knee_r.rotation.x = -maxf(0.0, -sin(_walk_phase + 0.9)) * amt * 0.9 - 0.06
+	var knee_amp := lerpf(0.9, 1.7, _run_amt)
+	_knee_l.rotation.x = -maxf(0.0, sin(_walk_phase + 0.9)) * amt * knee_amp - 0.06
+	_knee_r.rotation.x = -maxf(0.0, -sin(_walk_phase + 0.9)) * amt * knee_amp - 0.06
+	# 서 있을 때: 다리를 벌리고 앞뒤로 엇갈려 무릎을 굽힌 자세 (걸을수록 걷기 동작으로 바뀐다)
+	_stance_amt = lerpf(_stance_amt, 1.0 - amt, clampf(delta * 8.0, 0, 1))
+	var sta: Dictionary = st.stance
+	var drop := float(sta.crouch) * _stance_amt
+	if _stance_amt > 0.01:
+		_leg_ik(_leg_l, _knee_l, -float(sta.stagger) * 0.5, drop, _stance_amt)
+		_leg_ik(_leg_r, _knee_r, float(sta.stagger) * 0.5, drop, _stance_amt)
+		_leg_l.rotation.z -= float(sta.spread) * _stance_amt
+		_leg_r.rotation.z += float(sta.spread) * _stance_amt
+	# 공중: 앞 무릎을 끌어올리고 뒷다리는 접는다. 떨어질 때는 착지하려고 다리를 내린다
+	if _air_amt > 0.01:
+		var fall := clampf(-vy / 6.0, 0.0, 1.0)
+		var tuck := lerpf(1.0, 0.45, fall)
+		_leg_l.rotation.x = lerpf(_leg_l.rotation.x, 1.25 * tuck, _air_amt)
+		_knee_l.rotation.x = lerpf(_knee_l.rotation.x, -1.9 * tuck, _air_amt)
+		_leg_r.rotation.x = lerpf(_leg_r.rotation.x, -0.35 + 0.4 * (1.0 - tuck), _air_amt)
+		_knee_r.rotation.x = lerpf(_knee_r.rotation.x, -1.3 * tuck - 0.1, _air_amt)
+		_leg_l.rotation.z = lerpf(_leg_l.rotation.z, -0.12, _air_amt)
+		_leg_r.rotation.z = lerpf(_leg_r.rotation.z, 0.12, _air_amt)
 	# 발차기: 무릎을 접어 올렸다가(0.5) 뻗는다(1)
 	_leg_kick_amt = lerpf(_leg_kick_amt, leg_kick, clampf(delta * 20.0, 0, 1))
 	if _leg_kick_amt > 0.01:
@@ -198,11 +241,22 @@ func animate(delta: float, local_vel: Vector3) -> void:
 		_knee_l.rotation.x = lerpf(_knee_l.rotation.x, -0.25, chamber)
 
 	# 2) 위 몸: 팔과 허리를 목표 자세로
-	_arm_r.rotation_degrees = _arm_r.rotation_degrees.lerp(_shoulder_target, k)
-	_wrist.rotation_degrees = _wrist.rotation_degrees.lerp(_wrist_target, k)
-	_elbow_r.rotation.x = lerpf(_elbow_r.rotation.x, _elbow_target, k)
+	var sh_t := _shoulder_target
+	var wr_t := _wrist_target
+	var el_t := _elbow_target
+	var run_arm := _run_amt * (1.0 if _neutral else 0.0) * (1.0 - _air_amt)
+	if run_arm > 0.01:
+		# 달리기 팔: 무기마다 다르게 (뒤로 젖히기 / 어깨에 메기 / 낮게 겨누기)
+		var rp: Array = RUN_ARMS.get(str(st.run), RUN_ARMS.back)
+		sh_t = sh_t.lerp(rp[0], run_arm)
+		wr_t = wr_t.lerp(rp[1], run_arm)
+		el_t = lerpf(el_t, float(rp[2]), run_arm)
+	_arm_r.rotation_degrees = _arm_r.rotation_degrees.lerp(sh_t, k)
+	_wrist.rotation_degrees = _wrist.rotation_degrees.lerp(wr_t, k)
+	_elbow_r.rotation.x = lerpf(_elbow_r.rotation.x, el_t, k)
 	var tk := clampf(delta * 10.0, 0, 1)
-	var lean := -_lean_target - d * (-_dash_local.z) * 0.25
+	var lean := -_lean_target - d * (-_dash_local.z) * 0.25 - float(st.lean) * _run_amt * (1.0 - _air_amt) \
+			- 0.18 * _air_amt
 	var roll := -d * _dash_local.x * 0.3
 	if _leg_kick_amt > 0.01:
 		lean += _leg_kick_amt * 0.25          # 발을 뻗으면 몸을 뒤로 젖혀 균형을 잡는다
@@ -229,10 +283,22 @@ func animate(delta: float, local_vel: Vector3) -> void:
 		_leg_l.rotation.x = lerpf(_leg_l.rotation.x, -1.35, _low_amt)
 		_leg_r.rotation.x = lerpf(_leg_r.rotation.x, 0.6, _low_amt)
 		_knee_r.rotation.x = lerpf(_knee_r.rotation.x, -1.2, _low_amt)
-	rotation.x = _low_amt * 0.35
-	# 맨몸은 가볍게 들썩이며 선다
-	var bounce := (absf(sin(_t * 5.0)) * 0.02 * (1.0 - amt)) if weapon == "fists" else 0.0
-	position = Vector3(0, -_low_amt * 0.55 + bounce, _kick.x * -0.08)
+	# 가볍게 들썩이며 서는 무기 (맨몸, 수리검)
+	var bounce := absf(sin(_t * 5.0)) * float(sta.bounce) * _stance_amt * (1.0 - _air_amt)
+	position = Vector3(0, -_low_amt * 0.55 + bounce - drop * (1.0 - _air_amt), _kick.x * -0.08)
+	# 공중제비: 몸 가운데(허리 높이)를 축으로 앞으로 돈다
+	var flip := 0.0
+	if _flip_t >= 0.0:
+		_flip_t += delta / 0.55
+		var ft := clampf(_flip_t, 0.0, 1.0)
+		flip = -TAU * _flip_turns * (ft * ft * (3.0 - 2.0 * ft))
+		if _flip_t >= 1.0 or (not airborne and _flip_t > 0.3):
+			_flip_t = -1.0
+			flip = 0.0
+	rotation.x = _low_amt * 0.35 + flip
+	if flip != 0.0:
+		var c := Vector3(0, 0.95, 0)
+		position += c - c.rotated(Vector3.RIGHT, flip)
 
 	# 천자락: 움직이는 반대쪽으로 날린다
 	_flap_sway = _flap_sway.lerp(Vector3(clampf(-local_vel.z, -8, 8) * 0.09 + amt * 0.12, 0, clampf(local_vel.x, -8, 8) * 0.06), clampf(delta * 6.0, 0, 1))
@@ -260,8 +326,19 @@ func _left_arm(delta: float) -> void:
 		return
 	var target := Vector3(20, 0, -12)
 	var elbow := 0.45
+	var st := AnimStyle.get_style(weapon)
+	var left: Array = st.left
+	if _neutral and not left.is_empty():
+		target = left[0]
+		elbow = float(left[1])
+	if _run_amt > 0.05 and _neutral and _grip2 == null:
+		# 달리기: 왼팔도 뒤로 젖힌다
+		target = target.lerp(Vector3(-45, 0, -18), _run_amt * (1.0 - _air_amt))
+		elbow = lerpf(elbow, 0.25, _run_amt)
+	if _air_amt > 0.05 and _neutral and _grip2 == null:
+		target = target.lerp(Vector3(35, 0, -70), _air_amt)   # 공중: 팔을 펼쳐 균형
 	var mirror := Vector3(_shoulder_target.x, -_shoulder_target.y, -_shoulder_target.z)
-	if weapon == "daggers":
+	if weapon == "daggers" and not (_neutral and not left.is_empty() and _run_amt < 0.05):
 		target = mirror
 		elbow = _elbow_target
 	elif weapon == "fists":
@@ -280,7 +357,7 @@ func _left_arm(delta: float) -> void:
 			_elbow_r.rotation.x = lerpf(_elbow_r.rotation.x, 2.0, k)
 	else:
 		# 한 손 무기: 걸을 때 팔을 흔든다
-		target.x -= sin(_walk_phase) * 25.0 * clampf(_dash_amt + 0.5, 0, 1)
+		target.x -= sin(_walk_phase) * 25.0 * clampf(_dash_amt + 0.5, 0, 1) * (1.0 - _run_amt)
 	target = target.lerp(Vector3(82, 0, 8), _reach_amt)
 	elbow = lerpf(elbow, 0.15, _reach_amt)
 	_l_shoulder = _l_shoulder.lerp(target, k)
@@ -310,6 +387,36 @@ func _aim_left_at(target_g: Vector3) -> void:
 	_arm_l.transform.basis = b_upper
 	var fore_local := b_upper.inverse() * fore_dir
 	_elbow_l.transform.basis = Basis(Quaternion(Vector3.DOWN, fore_local))
+
+
+## 달리기 팔 자세 [어깨, 손목, 팔꿈치] (AnimStyle 의 run 값)
+const RUN_ARMS := {
+	"back": [Vector3(-55, 0, 18), Vector3(-60, 0, 0), 0.25],       # 두 팔을 뒤로 젖히고 몸을 숙여 달린다
+	"shoulder": [Vector3(150, -20, 30), Vector3(0, 0, 0), 1.9],    # 큰 칼을 어깨에 메고 달린다
+	"low": [Vector3(35, -10, 0), Vector3(-15, 0, 0), 0.3],         # 창끝을 낮게 앞으로 겨누고 달린다
+}
+
+
+## 다리 두 마디 IK (앞뒤 방향만): 엉덩이 기준으로 발이 z (앞이 -) 에, 엉덩이가 drop 만큼 내려가도 땅에 닿게
+func _leg_ik(leg: Node3D, knee: Node3D, z: float, drop: float, w: float) -> void:
+	const L1 := 0.44
+	const L2 := 0.47
+	var dy := L1 + L2 - 0.01 - drop
+	var dist := clampf(sqrt(z * z + dy * dy), 0.2, L1 + L2 - 0.005)
+	var phi := atan2(-z, dy)
+	var a := acos(clampf((L1 * L1 + dist * dist - L2 * L2) / (2.0 * L1 * dist), -1.0, 1.0))
+	var b := acos(clampf((L2 * L2 + dist * dist - L1 * L1) / (2.0 * L2 * dist), -1.0, 1.0))
+	leg.rotation.x = lerpf(leg.rotation.x, phi + a, w)
+	knee.rotation.x = lerpf(knee.rotation.x, -(a + b), w)
+
+
+## 높이 뛸 때 공중제비 (무기마다 AnimStyle air_flip). 이중 점프, 바람 발판에서 부른다
+func flip() -> void:
+	var turns := float(AnimStyle.val(weapon, "air_flip", 0.0))
+	if turns <= 0.0 or _flip_t >= 0.0:
+		return
+	_flip_turns = turns
+	_flip_t = 0.0
 
 
 ## 쓰러지기

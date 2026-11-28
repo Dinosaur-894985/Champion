@@ -255,6 +255,7 @@ func _physics_process(delta: float) -> void:
 		_dj_pending = false
 		if skills.try_double_jump(5.6):
 			_play("double_jump")
+			rig.flip()
 	skills.tick(delta)
 	_regen(delta)
 	_ammo_tick(delta)
@@ -362,6 +363,8 @@ func _apply_difficulty() -> void:
 
 
 func _process(delta: float) -> void:
+	rig.airborne = not is_on_floor() and state not in ["climb", "grapple", "hang", "zip", "wallrun"]
+	rig.vy = velocity.y
 	rig.animate(delta, global_transform.basis.inverse() * Vector3(velocity.x, 0, velocity.z))
 	_update_rope()
 	_update_trails()
@@ -2294,6 +2297,7 @@ func launch(vel: Vector3) -> void:
 	_flying = true
 	_fly_grace = 0.2
 	vkit.reset_fall()
+	rig.flip()
 	stats["launch"] = stats.get("launch", 0) + 1
 
 

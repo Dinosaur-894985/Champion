@@ -360,6 +360,8 @@ static func stat_or(weapon: String, key: String, dflt: float) -> float:
 
 ## 공격하지 않을 때의 1인칭 자세. 무기마다 따로 정한 게 있으면 그걸 쓴다 (맨몸: 두 주먹을 올린 막기)
 static func fp_pose(weapon: String, pose_name: String) -> Array:
+	if pose_name == "rest":
+		return AnimStyle.val(weapon, "fp_rest", MoveSet.FP_POSES.rest)   # 무기마다 서 있는 자세 (애니풍)
 	var own: Dictionary = get_weapon(weapon).get("fp_poses", {})
 	return own.get(pose_name, MoveSet.FP_POSES[pose_name])
 
