@@ -816,7 +816,9 @@ func _rps_step() -> void:
 		ai.sm.go("block")
 		_rps_check("AI side guard vs side slash", ai.take_hit(_with(hit, "side"), Vector3.FORWARD, player), "blocked")
 		ai.sm.go("block")
-		_rps_check("AI side guard vs thrust", ai.take_hit(_with(hit, "mid"), Vector3.FORWARD, player), "hit")
+		var hp0 := ai.hp
+		_rps_check("AI side guard vs thrust = half", [ai.take_hit(_with(hit, "mid"), Vector3.FORWARD, player), hp0 - ai.hp, ai.sm.state],
+				["wrong_guard", 5, "block"])
 		ai.guard_dir = "high"
 		ai.sm.go("block")
 		_rps_check("AI high guard vs overhead", ai.take_hit(_with(hit, "high"), Vector3.FORWARD, player), "blocked")
@@ -826,7 +828,9 @@ func _rps_step() -> void:
 		_rps_check("player high guard vs overhead", player.receive_attack(_with(hit, "high"), ai), "blocked")
 		player.sm.go("block")
 		player._guard_t = 1.0
-		_rps_check("player high guard vs side", player.receive_attack(_with(hit, "side"), ai), "wrong_guard")
+		var php0 := player.hp
+		_rps_check("player high guard vs side = half", [player.receive_attack(_with(hit, "side"), ai), php0 - player.hp, player.sm.state],
+				["wrong_guard", 5, "block"])
 		player.sm.go("block")
 		player.guard_dir = "mid"
 		player._guard_t = 0.0
@@ -852,6 +856,12 @@ func _rps_step() -> void:
 		# 4) 속임수: 내려찍기를 준비하다 오른쪽 클릭 → 막기로
 		ai.sm.go("idle")
 		player.sm.go("free")
+		player._start_attack("heavy")
+		player._attack_update(player._windup_total * 0.7)   # 준비가 거의 끝났다: 이제 못 속인다
+		player.block_pressed("high")
+		_rps_check("late feint refused", [player.sm.state, _rps.get("feinted", false)], ["attack", false])
+		player.sm.go("free")
+		player.stamina = player.max_stamina
 		player._start_attack("heavy")
 		player.block_pressed("mid")
 		_rps_check("feint heavy into block", [player.sm.state, player.guard_dir, _rps.get("feinted", false)],

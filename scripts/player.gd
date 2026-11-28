@@ -24,7 +24,8 @@ signal ammo_changed(value: int, max_value: int)       # 수리검 수
 # --- 이동 ---
 const WALK_SPEED := 5.0
 const SPRINT_SPEED := 8.0
-const GROUND_ACCEL := 16.0
+const GROUND_ACCEL := 14.0     # 출발할 때 붙는 빠르기 (순간이동처럼 끊기지 않게)
+const GROUND_DECEL := 12.0     # 멈출 때 빠지는 빠르기 (살짝 미끄러지듯 선다)
 const AIR_ACCEL := 4.0
 const FLY_STEER := 1.5          # 바람 발판으로 날아갈 때 방향키로 트는 힘
 const JUMP_VELOCITY := 5.4
@@ -62,6 +63,14 @@ const REGEN_DELAY := 0.7
 const BLOCK_SPEED_MULT := 0.45
 const PARRY_WINDOW := 0.2      # 막기를 누른 직후 이 시간 안에 맞으면 튕겨내기
 const BLOCK_COST := {"flinch": 14.0, "stagger": 30.0}
+## 막기 규칙 (2026-11 개편)
+##   방향이 틀려도 막고 있으면 피해 절반 (경직 없이 버틴다)
+##   방향까지 맞으면 완벽 막기: 피해 없음, 상대가 휘청한다
+const HALF_BLOCK := 0.5
+const FEINT_WINDOW := 0.5      # 공격 준비 시간 중 앞쪽 이만큼에서만 막기/잡기/피하기로 취소(속이기)
+const RIPOSTE_WINDOW := 0.5    # 완벽 막기/튕겨내기 뒤 이 시간 안에 휘두르면
+const RIPOSTE_WINDUP := 0.45   # 준비 동작이 이만큼으로 짧아진다 (바로 반격)
+const RECOVER_BLOCK := 0.5     # 휘두른 뒤 회복 동작이 이만큼 지나면 막기로 끊을 수 있다
 
 # --- 수싸움 ---
 const BLOCK_LOOK_SENS := 0.35  # 막는 동안은 마우스가 화면보다 막기 방향을 바꾸는 데 쓰인다
@@ -117,6 +126,8 @@ var _dash_local := Vector2.ZERO
 var _iframes := 0.0
 var _since_dash := 99.0
 var _counter_t := 0.0
+var _riposte_t := 0.0          # 완벽 막기 뒤 바로 반격할 수 있는 남은 시간
+var _windup_total := 0.0       # 이번 공격의 준비 시간 (속이기 판정)
 var _counter_used := false
 
 # 공격
@@ -176,6 +187,12 @@ var _stun_kind := ""
 var _kick := Vector3.ZERO      # 맞았을 때 카메라가 젖혀지는 정도
 var _roll := 0.0               # 옆으로 대시하거나 크게 벨 때 화면 기울기
 var _shake := 0.0
+var _sway := Vector2.ZERO      # 고개를 돌릴 때 손(무기)이 살짝 늦게 따라오는 정도
+var _sway_off := Vector3.ZERO
+var _bob_amp := 0.0            # 걷기 흔들림 크기 (빠르기에 맞춰 부드럽게 커지고 작아진다)
+var _tilt := 0.0               # 옆으로 걸을 때 화면이 살짝 기우는 정도
+var _land := 0.0               # 착지할 때 화면이 눌리는 깊이
+var _land_v := 0.0
 var _tremble := 0.0
 
 var head: Node3D
@@ -394,8 +411,9 @@ func _update_hands(delta: float) -> void:
 	var rp := _weapon_pivot.rotation
 	var pp := _weapon_pivot.position
 	var mirror := Transform3D(Basis.from_euler(Vector3(rp.x, -rp.y, -rp.z)), Vector3(-pp.x, pp.y, pp.z))
-	var wr := _weapon_root.position
-	_left_root.position = Vector3(-wr.x, wr.y, wr.z)
+	var wr := _weapon_root.position - _sway_off
+	_left_root.position = Vector3(-wr.x, wr.y, wr.z) + _sway_off   # 늦게 따라오는 쪽은 두 손이 같다
+	_left_root.rotation = _weapon_root.rotation
 	if weapon != "fists":
 		_left_pivot.transform = mirror
 		return
@@ -485,6 +503,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			if d != "" and d != guard_dir:
 				set_guard(d)
 				_flick.clear()
+		_sway += event.relative * 0.0011
+		_sway = _sway.limit_length(0.09)
 		rotate_y(-event.relative.x * sens)
 		head.rotate_x(-event.relative.y * sens * (-1.0 if GameSettings.invert_y else 1.0))
 		head.rotation.x = clampf(head.rotation.x, deg_to_rad(-88), deg_to_rad(88))
@@ -538,6 +558,7 @@ func _physics_process(delta: float) -> void:
 	_carry_t = maxf(_carry_t - delta, 0.0)
 	if _press_t >= 0.0:
 		_press_t += delta
+	_riposte_t = maxf(_riposte_t - delta, 0.0)
 	if _counter_t > 0.0:
 		_counter_t -= delta
 		if _counter_t <= 0.0:
@@ -589,9 +610,11 @@ func _physics_process(delta: float) -> void:
 		speed *= float(MoveSet.RUN.crouch_mult)
 
 	if not sm.is_in(["dash", "climb", "wallrun", "grapple", "plunge", "hang", "zip", "slide"]):
-		var accel := GROUND_ACCEL if on_floor else AIR_ACCEL
 		var target := dir * speed
 		var hv := Vector2(velocity.x, velocity.z)
+		var accel := AIR_ACCEL
+		if on_floor:
+			accel = GROUND_ACCEL if Vector2(target.x, target.z).length() >= hv.length() - 0.1 else GROUND_DECEL
 		if _sprinting and on_floor and hv.length() < speed:
 			accel = float(MoveSet.RUN.sprint_accel)   # 걷기에서 달리기로 부드럽게 빨라진다
 		elif on_floor and _carry_t > 0.0 and hv.length() > speed and dir.dot(Vector3(hv.x, 0, hv.y).normalized()) > 0.3:
@@ -656,6 +679,9 @@ func _after_move(was_on_floor: bool, input: Vector2) -> void:
 		if not was_on_floor and _fall_speed < -7.0:
 			# 높은 곳에서 떨어지면 착지할 때 화면이 살짝 눌린다
 			_kick.x -= deg_to_rad(clampf(-_fall_speed * 0.5, 0.0, 6.0))
+		if not was_on_floor and _fall_speed < -2.5:
+			# 착지: 무릎을 굽히듯 화면이 내려갔다 올라온다 (낮은 점프도 살짝)
+			_land_v -= clampf(-_fall_speed * 0.22, 0.4, 3.2)
 		_climb_used = false
 		_last_run_n = Vector3.ZERO
 		skills.landed()
@@ -918,8 +944,16 @@ func block_pressed(dir: String = "") -> void:
 		return
 	if dir != "":
 		set_guard(dir)
-	if _try_feint():
+	if _can_block_cancel() or _try_feint():
 		sm.go("block")
+
+
+## 휘두른 뒤 회복 동작 후반이면 막기로 바로 넘어갈 수 있다
+func _can_block_cancel() -> bool:
+	if sm.state != "attack" or _attack_phase != "recover" or _move == "":
+		return false
+	var total: float = float(_mv(_move).recover) * _atk_mult()
+	return _attack_timer <= total * (1.0 - RECOVER_BLOCK)
 
 
 ## 막기 방향을 바꾼다. 막는 중이면 칼 자세도 바로 바뀌고, 튕겨내기 시간이 다시 시작된다.
@@ -951,11 +985,22 @@ func _soft_lock(delta: float) -> void:
 	head.rotation.x = rotate_toward(head.rotation.x, clampf(pitch, -0.8, 0.8), LOCK_TURN * 0.5 * delta)
 
 
+## 지금 공격을 취소(속이기)할 수 있나: 준비 동작의 앞쪽 짧은 순간만 된다.
+func can_feint() -> bool:
+	if sm.state == "charge":
+		return true
+	if sm.state != "attack" or _attack_phase != "windup" or _move in ["counter", "grab"]:
+		return false
+	return _windup_total - _attack_timer <= _windup_total * FEINT_WINDOW
+
+
 ## 공격 준비(휘두르기 전)나 힘 모으기를 멈춘다. 멈췄으면 true. 기력이 조금 든다.
 func _try_feint() -> bool:
 	var winding := sm.state == "attack" and _attack_phase == "windup" and _move not in ["counter", "grab"]
 	if not winding and sm.state != "charge":
 		return sm.state in ["free", "block"]
+	if winding and not can_feint():
+		return false   # 이미 휘두르기 직전이다: 끝까지 휘두른다
 	_use_stamina(float(MoveSet.THROW.feint_cost))
 	_queued = ""
 	_press_owner = ""
@@ -969,7 +1014,7 @@ func _try_feint() -> bool:
 func _block_update(_delta: float) -> void:
 	if not Input.is_action_pressed("block") or not _can_act():
 		sm.go("free")
-		_pose_to(Weapons.fp_pose(weapon, "rest"), 0.14)
+		_pose_to(Weapons.fp_pose(weapon, "rest"), 0.08)   # 막기를 내리면 바로 움직일 수 있다
 
 
 # ---------------- 달리기 / 피하기 ----------------
@@ -1006,8 +1051,8 @@ func try_dash(dir := Vector2.ZERO) -> void:
 	# 공격은 준비 중(속임수)이거나 회복 동작 중일 때만 대시로 끊을 수 있다. 휘두르는 순간은 안 된다.
 	if sm.state == "attack" and _attack_phase == "active":
 		return
-	if sm.state == "attack" and _attack_phase == "windup" and _move in ["counter", "grab"]:
-		return
+	if sm.state == "attack" and _attack_phase == "windup" and (_move in ["counter", "grab"] or not can_feint()):
+		return   # 휘두르기 직전에는 피하기로 끊을 수 없다
 	if stamina < DASH_COST * build.dash_cost_mult() * 0.5:
 		return
 	var input := dir if dir != Vector2.ZERO else Input.get_vector("move_left", "move_right", "move_forward", "move_back")
@@ -1173,6 +1218,12 @@ func _attack_enter(d: Dictionary) -> void:
 	_use_stamina(data.cost)
 	_attack_phase = "windup"
 	_attack_timer = data.windup * _atk_mult()
+	if _riposte_t > 0.0 and _move not in ["grab", "charge"]:
+		# 완벽 막기 직후: 기다림 없이 바로 반격한다
+		_attack_timer *= RIPOSTE_WINDUP
+		_riposte_t = 0.0
+		combat_event.emit("바로 반격!", Color(0.6, 0.95, 1.0))
+	_windup_total = _attack_timer
 	_queued = ""
 	if _buffer_dir != "none":
 		_aim_dir = _buffer_dir
@@ -1192,7 +1243,7 @@ func _attack_enter(d: Dictionary) -> void:
 		velocity.y = float(data.hop)   # 쪼개기: 살짝 뛰어올라 내리찍는다
 	_kill_weapon_tween()
 	_weapon_tween = create_tween()
-	_tween_pose(_weapon_tween, data.fp.windup, data.windup * _atk_mult(),
+	_tween_pose(_weapon_tween, data.fp.windup, _windup_total,
 			Tween.TRANS_BACK if _move in ["heavy", "cleave", "spin"] else Tween.TRANS_SINE)
 	attack_started.emit(_move)
 
@@ -1225,6 +1276,9 @@ func _attack_update(delta: float) -> void:
 				_attack_timer = data.recover * _atk_mult()
 				_tween_back(data.recover * _atk_mult())
 		"recover":
+			if _queued == "" and _can_act() and Input.is_action_pressed("block") and _can_block_cancel():
+				sm.go("block")   # 막기를 누르고 있으면 회복 동작 후반을 끊고 막는다
+				return
 			# 다음 공격이 예약돼 있으면 회복 동작 중간에 이어서 휘두른다.
 			if _queued != "" and _attack_timer <= data.recover * _atk_mult() * 0.55:
 				var nxt := _queued
@@ -1314,7 +1368,8 @@ func try_grab() -> void:
 		return
 	var winding := (sm.state == "attack" and _attack_phase == "windup") or sm.state == "charge"
 	if winding:
-		_try_feint()   # 휘두르는 척하다 잡기
+		if not _try_feint():   # 휘두르는 척하다 잡기 (준비 앞쪽에서만)
+			return
 	elif not sm.is_in(["free", "block"]):
 		return
 	if stamina < float(_mv("grab").cost) * 0.5:
@@ -1602,10 +1657,21 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 		_shake = 0.3
 		return "blocked"
 	if blocking and in_front and info.guard != "unblockable" and not AttackDir.blocks(guard_dir, info.get("dir", "")):
-		# 막기 방향이 틀렸다: 그대로 맞는다
-		combat_event.emit("%s 공격이었다!" % AttackDir.NAMES.get(info.dir, ""), Color(1.0, 0.55, 0.35))
-		_take_damage(damage, to_attacker)
-		_react(info.react, to_attacker)
+		# 막기 방향이 틀렸다: 반만 막는다 (피해 절반, 큰 공격이면 살짝 움찔)
+		_use_stamina(BLOCK_COST.get(info.react, 14.0) * float(info.get("pressure", 1.0)) * Weapons.stat(weapon, "block_cost"))
+		if info.guard == "break" or stamina <= 0.0:
+			_use_stamina(0.0)
+			combat_event.emit("가드 깨짐!", Color(1.0, 0.5, 0.3))
+			_play("guard_break")
+			_take_damage(damage / 2, to_attacker)
+			_react("guard_break", to_attacker)
+			return "guard_broken"
+		_play(_wsnd("clash"), 0.85, -4.0)
+		Fx.sparks(get_parent(), _blade_tip.global_position, to_attacker.normalized(), 10)
+		combat_event.emit("반만 막음 · %s 공격이었다" % AttackDir.NAMES.get(info.get("dir", ""), ""), Color(1.0, 0.7, 0.4))
+		_take_damage(int(ceilf(damage * HALF_BLOCK)), to_attacker)
+		if info.react == "stagger":
+			_react("flinch", to_attacker)
 		return "wrong_guard"
 	if blocking and in_front and info.guard != "unblockable":
 		var contact := _blade_tip.global_position
@@ -1616,6 +1682,7 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 			_shake = 0.5
 			_slow_motion(0.25, 0.3)
 			add_gauge(Weapons.GAUGE.parry)
+			_riposte_t = RIPOSTE_WINDOW + 0.3
 			return "parried"
 		_play(_wsnd("clash"))
 		Fx.sparks(get_parent(), contact, to_attacker.normalized())
@@ -1633,6 +1700,9 @@ func _resolve_attack(info: Dictionary, attacker: Node3D) -> String:
 			_take_damage(damage / 2, to_attacker)
 			_react("guard_break", to_attacker)
 			return "guard_broken"
+		# 완벽 막기: 상대는 휘청하고, 나는 바로 반격할 수 있다
+		combat_event.emit("완벽 막기!", Color(0.75, 0.9, 1.0))
+		_riposte_t = RIPOSTE_WINDOW
 		return "blocked"
 	_take_damage(damage, to_attacker)
 	# 차지 중에 맞으면 모은 힘이 날아간다
@@ -1720,6 +1790,11 @@ func _check_hits(data: Dictionary) -> void:
 				return
 			"dodged":
 				combat_event.emit("피했다!", Color(1.0, 0.7, 0.4))
+			"wrong_guard":
+				# 방향을 못 맞춘 막기: 반만 들어갔다
+				add_gauge(info.damage * HALF_BLOCK * Weapons.GAUGE.dealt)
+				combat_event.emit("반만 막혔다", Color(1.0, 0.85, 0.5))
+				_on_hit_landed(false)
 			"none":
 				_shake = maxf(_shake, 0.25)
 			_:
@@ -1775,11 +1850,23 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 		_bob_t += delta * horiz * 1.9
 	else:
 		_bob_t = lerpf(_bob_t, roundf(_bob_t / PI) * PI, clampf(delta * 6.0, 0, 1))
-	var bob_amt := 0.045 if sprinting else 0.03
-	var bob := Vector3(cos(_bob_t * 0.5) * bob_amt * 0.6, absf(sin(_bob_t)) * bob_amt, 0)
+	var motion := 1.0 if GameSettings.view_motion else 0.0   # 설정: 화면 흔들림 끄기 (멀미)
+	var moving := on_floor and horiz > 0.5 and not sm.is_in(["dash", "slide"])
+	var bob_goal := ((0.045 if sprinting else 0.03) * clampf(horiz / WALK_SPEED, 0.0, 1.0) if moving else 0.0) * motion
+	_bob_amp = lerpf(_bob_amp, bob_goal, clampf(delta * 6.0, 0, 1))
+	var bob := Vector3(cos(_bob_t * 0.5) * _bob_amp * 0.6, absf(sin(_bob_t)) * _bob_amp, 0)
+	# 착지 눌림: 용수철처럼 내려갔다 돌아온다
+	_land_v += (-_land * 160.0 - _land_v * 18.0) * delta
+	_land = clampf(_land + _land_v * delta, -0.16, 0.05)
+	bob.y += _land * motion
+	# 손(무기)이 고개 돌림을 살짝 늦게 따라온다
+	_sway = _sway.lerp(Vector2.ZERO, clampf(delta * 9.0, 0, 1))
+	# 옆으로 걸으면 그쪽으로 아주 살짝 기운다
+	var side_v := (global_transform.basis.inverse() * velocity).x if on_floor else 0.0
+	_tilt = lerpf(_tilt, -clampf(side_v / SPRINT_SPEED, -1.0, 1.0) * deg_to_rad(1.4) * motion, clampf(delta * 8.0, 0, 1))
 	# 맞혔을 때 / 맞았을 때 화면 흔들림
 	_shake = maxf(_shake - delta * 3.5, 0.0)
-	var shake := Vector3(randf_range(-1, 1), randf_range(-1, 1), 0) * _shake * _shake * 0.05
+	var shake := Vector3(randf_range(-1, 1), randf_range(-1, 1), 0) * _shake * _shake * 0.05 * lerpf(0.4, 1.0, motion)
 	camera.position = camera.position.lerp(bob, clampf(delta * 12.0, 0, 1)) + shake
 	_kick = _kick.lerp(Vector3.ZERO, clampf(delta * 7.0, 0, 1))
 	# 옆으로 대시하면 그쪽으로 화면이 기운다
@@ -1793,7 +1880,7 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 	elif sm.state == "slide":
 		roll_target = deg_to_rad(-4.0)
 	_roll = lerpf(_roll, roll_target, clampf(delta * 10.0, 0, 1))
-	camera.rotation = _kick + Vector3(0, 0, _roll)
+	camera.rotation = _kick + Vector3(0, 0, _roll + _tilt)
 	# 달리거나 대시할 때 시야가 넓어짐
 	var target_fov := 78.0
 	if sm.state == "dash":
@@ -1823,7 +1910,10 @@ func _update_camera(delta: float, on_floor: bool, sprinting: bool) -> void:
 	if _tremble > 0.0:
 		var t := Time.get_ticks_msec() * 0.06
 		tr = Vector3(sin(t * 1.3), sin(t * 1.9), 0) * _tremble * 0.006
-	_weapon_root.position = _rest_pos() + Vector3(bob.x * 0.5, -bob.y * 0.6, 0) + tr
+	var sw := _sway * motion
+	_sway_off = Vector3(-sw.x * 0.35, sw.y * 0.3, 0) + Vector3(0, _land * motion * 0.35, 0)
+	_weapon_root.position = _rest_pos() + Vector3(bob.x * 0.5, -bob.y * 0.6, 0) + tr + _sway_off
+	_weapon_root.rotation = Vector3(sw.y * 0.8, sw.x * 1.0, -_tilt * 1.5)
 
 
 # ---------------- 특수 스킬 ----------------
