@@ -19,6 +19,7 @@ var mode := "practice"
 var arena: Arena
 var player: Player
 var duelist: Duelist
+var tutorial: Tutorial
 var hud: CanvasLayer
 var hits := 0
 var knockdowns := 0
@@ -54,6 +55,8 @@ func _ready() -> void:
 
 	if mode == "duel":
 		_setup_duel()
+	elif mode == "tutorial":
+		_setup_tutorial()
 	else:
 		_setup_practice()
 	_setup_arena_events()
@@ -61,7 +64,7 @@ func _ready() -> void:
 	_warmup()
 
 	# 배경음악: 처음 화면과 연습장은 차분한 곡, 대결은 숫자 세기와 함께 긴박한 곡
-	if first_launch or mode == "practice":
+	if first_launch or mode in ["practice", "tutorial"]:
 		Audio.music("menu")
 	if first_launch:
 		hud.show_menu("start")
@@ -74,6 +77,11 @@ func _ready() -> void:
 func _setup_practice() -> void:
 	player.position = Vector3(0, 0.1, 7.5)
 	hud.set_mode("practice")
+	_spawn_dummies()
+	hud.set_stats(hits, knockdowns)
+
+
+func _spawn_dummies() -> void:
 	for i in 3:
 		var d := TrainingDummy.new()
 		var x := (i - 1) * 3.2
@@ -82,7 +90,34 @@ func _setup_practice() -> void:
 		add_child(d)
 		d.hit_taken.connect(_on_hit)
 		d.knocked_down.connect(_on_knockdown)
-	hud.set_stats(hits, knockdowns)
+
+
+## 튜토리얼: 허수아비로 이동·공격을 배우고, 연습 상대(천천히 공격함)로 막기·피하기·필살기를 배운다
+func _setup_tutorial() -> void:
+	player.position = Vector3(0, 0.1, 7.5)
+	hud.set_mode("tutorial")
+	_spawn_dummies()
+	# 연습 상대는 처음엔 옆에서 기다리다가 막기 단계에서 다가온다
+	duelist = Duelist.new()
+	var b := CharacterBuild.preset("검객")
+	b.contrast_with(player.build)
+	duelist.build = b
+	duelist.tutor = true
+	duelist.position = Vector3(5.5, 0.1, 2.5)
+	var look := player.position - duelist.position
+	duelist.rotation.y = atan2(-look.x, -look.z)
+	duelist.arena = arena
+	add_child(duelist)
+	duelist.target = player
+	hud.set_opponent(duelist)
+	duelist.combat_event.connect(hud.show_event)
+	tutorial = Tutorial.new()
+	tutorial.setup(self, duelist)
+	add_child(tutorial)
+	tutorial.finished.connect(func():
+		hud.show_big("튜토리얼 완료!", Color(1.0, 0.85, 0.3))
+		Audio.stinger("victory", "menu")
+		get_tree().create_timer(1.6, false).timeout.connect(func(): hud.show_menu("tutorial_done")))
 
 
 func _setup_duel() -> void:
@@ -207,7 +242,13 @@ func _on_menu_choice(choice: String) -> void:
 			hud.show_menu(hud.menu_return)
 		"resume":
 			hud.hide_menu()
-		"practice", "duel":
+		"tut_skip":
+			hud.hide_menu()
+			if tutorial:
+				tutorial.skip()
+		"home":
+			restart("")
+		"practice", "duel", "tutorial":
 			if choice == mode and next_mode == "" and not round_over:
 				# 처음 켠 화면에서 지금 모드를 고른 경우: 그대로 시작
 				next_mode = mode

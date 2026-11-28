@@ -329,9 +329,10 @@ func _add_button(text: String, choice: String, primary: bool = false, width: int
 	_menu_buttons.add_child(b)
 
 
-## kind: "start", "pause", "win", "lose", "opponent"(상대 고르기), "presets"(정해진 상대 목록)
+## kind: "start", "pause", "win", "lose", "opponent"(상대 고르기), "presets"(정해진 상대 목록),
+## "tutorial_done"(튜토리얼을 마쳤다)
 func show_menu(kind: String) -> void:
-	if kind in ["start", "pause", "win", "lose"]:
+	if kind in ["start", "pause", "win", "lose", "tutorial_done"]:
 		menu_return = kind
 	_menu_kind = kind
 	for c in _menu_buttons.get_children():
@@ -341,22 +342,35 @@ func show_menu(kind: String) -> void:
 		"start":
 			_menu_title.text = "챔피언"
 			_menu_sub.text = "1대1 칼싸움\n\n내 캐릭터:  " + my_build
-			_add_button("AI와 대결", "opponent", true)
+			var first_time := not Tutorial.is_done()
+			if first_time:
+				# 처음 하는 사람: 튜토리얼을 맨 위에, 눈에 띄게
+				_add_button("튜토리얼  ·  처음이라면 여기부터!", "tutorial", true)
+			_add_button("AI와 대결", "opponent", not first_time)
 			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장 (허수아비)", "practice")
+			if not first_time:
+				_add_button("튜토리얼 (조작 배우기)", "tutorial")
 			_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
 		"pause":
 			_menu_title.text = "일시정지"
-			_menu_sub.text = ("AI와 대결 중" if _mode == "duel" else "연습장") + "\n\n내 캐릭터:  " + my_build
-			_add_button("계속하기", "resume", true)
-			_add_button("처음부터 다시", "retry")
-			_add_button("캐릭터 만들기", "build")
-			if _mode == "duel":
-				_add_button("다른 상대 고르기", "opponent")
-				_add_button("연습장으로", "practice")
+			if _mode == "tutorial":
+				_menu_sub.text = "튜토리얼 중"
+				_add_button("계속하기", "resume", true)
+				_add_button("이 단계 건너뛰기", "tut_skip")
+				_add_button("튜토리얼 그만두기 (처음 화면)", "home")
+				_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
 			else:
-				_add_button("AI와 대결", "opponent")
-			_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
+				_menu_sub.text = ("AI와 대결 중" if _mode == "duel" else "연습장") + "\n\n내 캐릭터:  " + my_build
+				_add_button("계속하기", "resume", true)
+				_add_button("처음부터 다시", "retry")
+				_add_button("캐릭터 만들기", "build")
+				if _mode == "duel":
+					_add_button("다른 상대 고르기", "opponent")
+					_add_button("연습장으로", "practice")
+				else:
+					_add_button("AI와 대결", "opponent")
+				_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
 		"win":
 			_menu_title.text = "승리!"
 			_menu_sub.text = "%s을(를) 쓰러뜨렸어요" % _enemy_title
@@ -371,6 +385,13 @@ func show_menu(kind: String) -> void:
 			_add_button("다른 상대 고르기", "opponent")
 			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장으로", "practice")
+		"tutorial_done":
+			_menu_title.text = "튜토리얼 끝!"
+			_menu_sub.text = GameSettings.fill("이제 AI와 붙어 보세요.\n잊어버린 조작은 연습장 왼쪽 위에 늘 적혀 있어요.\n{grab} 잡기, {crouch} 슬라이딩, {skill1}/{skill2} 스킬도 있어요.")
+			_add_button("AI와 대결", "opponent", true)
+			_add_button("연습장 (허수아비)", "practice")
+			_add_button("튜토리얼 다시 하기", "retry")
+			_add_button("처음 화면", "home")
 		"opponent":
 			_menu_title.text = "상대 고르기"
 			_menu_sub.text = "AI 도 나와 같은 규칙(점수 %d점, 스킬 2개)으로 만들어져요" % CharacterBuild.POINTS
@@ -385,7 +406,7 @@ func show_menu(kind: String) -> void:
 				var b := CharacterBuild.preset(n)
 				_add_button("%s   ·   %s" % [n, b.summary()], "vs_preset:" + n, false, 760)
 			_add_button("뒤로", "back")
-	if kind in ["start", "pause", "win", "lose"] and not OS.has_feature("web"):
+	if kind in ["start", "pause", "win", "lose", "tutorial_done"] and not OS.has_feature("web"):
 		_add_button("게임 종료", "quit")
 	_overlay.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -442,8 +463,15 @@ func _on_settings_closed() -> void:
 	show_menu(menu_return)
 
 
+## 튜토리얼 안내판처럼 화면에 붙는 것 (메뉴보다 아래에 깔린다)
+func add_panel(c: Control) -> void:
+	_root.add_child(c)
+	_root.move_child(c, _overlay.get_index())
+
+
 ## 키를 바꾼 뒤 조작법과 스킬 칸의 키 이름을 새로 쓴다
 func refresh_keys() -> void:
+	get_tree().call_group("key_labels", "refresh_keys")
 	_help.text = GameSettings.fill(HELP_TEXT)
 	if _help2:
 		_help2.text = GameSettings.fill(HELP2_TEXT)
@@ -471,8 +499,9 @@ func set_mode(m: String) -> void:
 	_mode = m
 	_enemy_box.visible = m == "duel"
 	_enemy_stamina.visible = m == "duel"
-	_hp_box.visible = m == "duel"
+	_hp_box.visible = m in ["duel", "tutorial"]
 	_stats.visible = m == "practice"
+	_help.visible = m != "tutorial"   # 튜토리얼은 단계마다 필요한 조작만 보여 준다
 
 
 func _unhandled_input(event: InputEvent) -> void:
