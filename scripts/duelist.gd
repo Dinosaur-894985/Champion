@@ -44,6 +44,14 @@ var charge_chance := 0.18       # 거리가 벌어졌을 때 차지 베기
 var read_skill := 0.55          # 상대 공격 방향을 보고 맞게 막을 확률 (나머지는 버릇으로 짐작)
 var feint_chance := 0.3         # 공격 준비 중 방향을 바꾸거나 잡기로 바꾸는 속임수
 var grab_chance := 0.35         # 막고 있는 상대에게 다가가 잡기
+## 튜토리얼 연습 상대: 혼자 판단하지 않고, 다가와 서서 천천히 한 방씩만 휘두른다.
+## 막거나 피하지 않고, 속임수도 안 쓰고, 쓰러지지도 않는다 (scripts/tutorial.gd 가 조종).
+var tutor := false
+var tutor_attacks := false      # 지금 공격할 차례인가 (튜토리얼 단계가 정함)
+var tutor_dirs: Array = AttackDir.ALL   # 고를 공격 방향
+var tutor_gap := 1.5            # 한 번 휘두른 뒤 다음까지 쉬는 시간
+const TUTOR_SLOW := 1.7         # 준비 동작을 이만큼 느리게 (보고 반응할 시간)
+var _tutor_cd := 1.0
 ## 막기 방향 (AttackDir). 상대 공격과 방향이 같아야 막힌다.
 var guard_dir := AttackDir.SIDE
 ## 상대 버릇 기억
@@ -235,6 +243,8 @@ func _physics_process(delta: float) -> void:
 		add_gauge(Weapons.GAUGE.regen * delta)
 	_alert = maxf(_alert - delta, 0.0)
 	_move_cd -= delta
+	if state == "idle":
+		_tutor_cd -= delta
 	_iframes = maxf(_iframes - delta, 0.0)
 	_thrown_t = maxf(_thrown_t - delta, 0.0)
 	_hits_reset -= delta
@@ -361,6 +371,9 @@ func _update_trails() -> void:
 
 func _think() -> void:
 	_think_t = randf_range(0.18, 0.35)
+	if tutor:
+		_tutor_think()
+		return
 	if _think_vertical():
 		return
 	if not _direct:
@@ -450,6 +463,18 @@ func _think() -> void:
 		_enter_block()
 
 
+## 튜토리얼 상대: 적당한 거리로 다가와 서 있다가, 차례가 되면 한 방 휘두른다
+func _tutor_think() -> void:
+	_think_t = 0.15
+	if _dist > 2.6 or not _direct:
+		sm.go("approach")
+		return
+	sm.go("idle")
+	if tutor_attacks and _tutor_cd <= 0.0 and target.sm.state not in ["special", "stagger"]:
+		_combo_left = 0
+		_start_attack(_move_for_dir(tutor_dirs.pick_random()))
+
+
 ## 상대가 수리검을 들고 멀리 있다: 달려가 붙고, 가끔 앞으로 대시해 거리를 확 좁힌다
 func _chase_ranged() -> bool:
 	if target.ammo_max <= 0 or _dist < 5.0:
@@ -483,7 +508,7 @@ func _set_guard(dir: String) -> void:
 
 ## 플레이어가 공격을 시작했을 때 (Main 이 연결해 준다)
 func on_target_attack(kind: String) -> void:
-	if not active or dead:
+	if not active or dead or tutor:
 		return
 	var dir: String = Weapons.move(target.weapon, kind).get("dir", "") if (MoveSet.MOVES.has(kind) or kind == "special") else ""
 	if kind == "grab":
@@ -549,6 +574,8 @@ func on_target_attack(kind: String) -> void:
 
 ## 플레이어가 공격을 멈췄을 때 (속임수). 자주 속이면 다음엔 덜 서둘러 막는다.
 func on_target_feint() -> void:
+	if tutor:
+		return
 	mind.saw_feint()
 	stats["saw_feint"] = stats.get("saw_feint", 0) + 1
 	# 속임수에 막기만 하고 서 있으면 잡힌다: 가끔 바로 막기를 풀고 반격
@@ -559,7 +586,7 @@ func on_target_feint() -> void:
 
 ## 플레이어가 힘을 모으기 시작했을 때: 파고들어 끊거나, 물러난다
 func on_target_charge() -> void:
-	if not _can_react() or state == "recover":
+	if tutor or not _can_react() or state == "recover":
 		return
 	await get_tree().create_timer(reaction_time + 0.1, false).timeout
 	if not _can_react():
@@ -580,6 +607,8 @@ func on_target_charge() -> void:
 
 
 func _back_to_neutral() -> void:
+	if tutor:
+		_tutor_cd = tutor_gap
 	sm.go("circle" if randf() < 0.5 else "approach")
 	_strafe_dir = -1.0 if randf() < 0.5 else 1.0
 	_think_t = randf_range(0.05, 0.25)
@@ -589,7 +618,7 @@ func _back_to_neutral() -> void:
 	rig.reach = 0.0
 	rig.leg_kick = 0.0
 	# 경직이 풀렸는데 상대가 이미 휘두르고 있으면: 바로 방향을 읽고 막는다 (연타에 갇히지 않게)
-	if active and target and target.attack_threat() and _dist < 3.2 \
+	if active and not tutor and target and target.attack_threat() and _dist < 3.2 \
 			and randf() < block_chance + (0.3 if _alert > 0.0 else 0.1):
 		guard_dir = _read_dir(target.attack_dir())
 		_enter_block()
@@ -607,6 +636,11 @@ func _neutral_update(delta: float) -> void:
 		_move = _nav_move(delta)
 		return
 	_path.clear()
+	if tutor and state == "idle":
+		# 튜토리얼 상대: 제자리에서 거리만 맞춘다 (빙빙 돌지 않는다)
+		_move = _dir * clampf((_dist - 2.2) * 1.5, -1.5, 1.5)
+		_move = _edge_guard(_move)
+		return
 	var side := Vector3(-_dir.z, 0, _dir.x)
 	if _grab_wait > 0.0:
 		# 잡으려고 바짝 붙는다
@@ -682,6 +716,8 @@ func _windup_enter(_d: Dictionary) -> void:
 	spend_stamina(float(data.cost))
 	# 자꾸 피하면 일부러 한 박자 늦게 휘두르기도 한다
 	_windup_len = data.ai_windup * _atk_mult() + randf() * 0.12 * mini(_dodged_by_target, 3)
+	if tutor:
+		_windup_len = data.ai_windup * _atk_mult() * TUTOR_SLOW
 	rig.set_pose(data.body.windup, 2.5 / (data.ai_windup * _atk_mult()), str(data.get("hand", "")))
 	_kick_pose(data, 0.5)
 	var col := Color(1.0, 0.55, 0.1)
@@ -707,7 +743,7 @@ func _windup_enter(_d: Dictionary) -> void:
 func _windup_update(_delta: float) -> void:
 	var data: Dictionary = _mv(_attack)
 	_turn_speed = WINDUP_TURN_SPEED
-	var k := clampf(_state_t / (data.ai_windup * _atk_mult()), 0.0, 1.0)
+	var k := clampf(_state_t / (_windup_len if tutor else data.ai_windup * _atk_mult()), 0.0, 1.0)
 	rig.glow(rig.blade_mat.emission, k * k * 3.5)
 	if _attack == "charge":
 		# 힘을 모으며 천천히 다가온다
@@ -722,7 +758,7 @@ func _windup_update(_delta: float) -> void:
 	else:
 		_move = _dir * 0.6 if _dist > 1.6 else Vector3.ZERO
 	# 속임수: 준비가 반쯤 됐을 때 한 번 정한다
-	if not _feint_checked and _state_t >= _windup_len * 0.45:
+	if not _feint_checked and not tutor and _state_t >= _windup_len * 0.45:
 		_feint_checked = true
 		if _try_feint():
 			return
@@ -1329,7 +1365,7 @@ func _take_hit(info: Dictionary, dir: Vector3) -> String:
 
 
 func _apply_damage(damage: int, dir: Vector3, big: bool, sound := "") -> void:
-	hp = max(hp - damage, 0)
+	hp = max(hp - damage, 1 if tutor else 0)   # 튜토리얼 상대는 쓰러지지 않는다
 	add_gauge(damage * Weapons.GAUGE.taken)
 	hp_changed.emit(hp, max_hp)
 	_alert = 2.0
