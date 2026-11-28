@@ -351,6 +351,7 @@ func show_menu(kind: String) -> void:
 			_add_button("연습장 (허수아비)", "practice")
 			if not first_time:
 				_add_button("튜토리얼 (조작 배우기)", "tutorial")
+			_add_button("전적 (무기별 승률)", "records")
 			_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
 		"pause":
 			_menu_title.text = "일시정지"
@@ -373,22 +374,28 @@ func show_menu(kind: String) -> void:
 				_add_button("설정 (감도 · 키 · 화질 · 소리)", "settings")
 		"win":
 			_menu_title.text = "승리!"
-			_menu_sub.text = "%s을(를) 쓰러뜨렸어요" % _enemy_title
+			_menu_sub.text = "%s을(를) 쓰러뜨렸어요  ·  %s" % [_enemy_title, Duelist.DIFFICULTY_NAMES.get(Game.ai_difficulty(), "")]
+			_add_result_panel(true)
 			if Game.ai_difficulty() != "hard":
-				_menu_sub.text += "\n이번엔 '%s'에 도전해 볼까요? (다른 상대 고르기 → 난이도)" % Duelist.DIFFICULTY_NAMES["hard" if Game.ai_difficulty() == "normal" else "normal"]
+				_add_note("이번엔 '%s'에 도전해 볼까요? (다른 상대 고르기 → 난이도)" % Duelist.DIFFICULTY_NAMES["hard" if Game.ai_difficulty() == "normal" else "normal"])
 			_add_button("다시 대결", "retry", true)
 			_add_button("다른 상대 고르기", "opponent")
 			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장으로", "practice")
 		"lose":
 			_menu_title.text = "패배"
-			_menu_sub.text = GameSettings.fill("빛나는 칼을 보면 막거나({block}) 옆으로 피하세요({move_left} 또는 {move_right} 두 번 빠르게)")
+			_menu_sub.text = "%s에게 졌어요  ·  %s" % [_enemy_title, Duelist.DIFFICULTY_NAMES.get(Game.ai_difficulty(), "")]
+			_add_result_panel(false)
+			_add_note(GameSettings.fill("빛나는 칼을 보면 막거나({block}) 옆으로 피하세요({move_left} 또는 {move_right} 두 번 빠르게)"))
 			if Game.ai_difficulty() != "easy":
-				_menu_sub.text += "\n너무 어렵다면 난이도를 낮춰 보세요 (다른 상대 고르기 → 난이도)"
+				_add_note("너무 어렵다면 난이도를 낮춰 보세요 (다른 상대 고르기 → 난이도)")
 			_add_button("다시 대결", "retry", true)
 			_add_button("다른 상대 고르기", "opponent")
 			_add_button("캐릭터 만들기", "build")
 			_add_button("연습장으로", "practice")
+		"records":
+			_add_records()
+			_add_button("뒤로", "back")
 		"tutorial_done":
 			_menu_title.text = "튜토리얼 끝!"
 			_menu_sub.text = GameSettings.fill("이제 AI와 붙어 보세요.\n잊어버린 조작은 연습장 왼쪽 위에 늘 적혀 있어요.\n{grab} 잡기, {crouch} 슬라이딩, {skill1}/{skill2} 스킬도 있어요.")
@@ -462,6 +469,178 @@ func _add_difficulty_row() -> void:
 	var gap := Control.new()
 	gap.custom_minimum_size = Vector2(0, 6)
 	_menu_buttons.add_child(gap)
+
+
+# ---------------- 결과 화면, 전적 ----------------
+
+## 이번 판 결과 (Game 이 대결이 끝날 때 채운다): {"stats", "time", "record"}
+var result := {}
+
+
+## 결과 화면 가운데: 이번 판 숫자들 + 이 무기 전적 한 줄
+func _add_result_panel(won: bool) -> void:
+	if result.is_empty():
+		return
+	var st: Dictionary = result.stats
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 18)
+	grid.add_theme_constant_override("v_separation", 6)
+	var rows := [
+		["걸린 시간", Records.clock(float(result.time))], ["준 피해", str(st.dealt)],
+		["받은 피해", str(st.taken)], ["최고 연속기", "%d연속" % st.combo],
+		["완벽 막기", "%d번" % st.perfect], ["피하기", "%d번" % st.dodged],
+	]
+	for r in rows:
+		var k := Label.new()
+		k.text = r[0]
+		k.add_theme_font_size_override("font_size", 16)
+		k.add_theme_color_override("font_color", Color(1, 1, 1, 0.6))
+		k.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		k.custom_minimum_size = Vector2(110, 0)
+		grid.add_child(k)
+		var v := Label.new()
+		v.text = r[1]
+		v.add_theme_font_size_override("font_size", 20)
+		v.custom_minimum_size = Vector2(90, 0)
+		grid.add_child(v)
+	var center := CenterContainer.new()
+	center.add_child(grid)
+	_menu_buttons.add_child(center)
+	var rec: Dictionary = result.get("record", {})
+	if not rec.is_empty():
+		var parts := ["%s 전적  %s" % [Weapons.display_name(_player.weapon) if _player else "", Records.line(rec.weapon)]]
+		if won and int(rec.streak) >= 2:
+			parts.append("%d연승!" % rec.streak)
+		if won and rec.new_fastest:
+			parts.append("가장 빨리 이겼어요! %s" % Records.clock(float(rec.fastest)))
+		var l := Label.new()
+		l.text = "   ·   ".join(parts)
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.add_theme_font_size_override("font_size", 18)
+		l.add_theme_color_override("font_color", Color(1.0, 0.85, 0.45) if won else Color(1, 1, 1, 0.85))
+		_menu_buttons.add_child(l)
+	var gap := Control.new()
+	gap.custom_minimum_size = Vector2(0, 4)
+	_menu_buttons.add_child(gap)
+
+
+func _add_note(text: String) -> void:
+	var l := Label.new()
+	l.text = text
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.add_theme_font_size_override("font_size", 15)
+	l.add_theme_color_override("font_color", Color(1, 1, 1, 0.65))
+	_menu_buttons.add_child(l)
+	_menu_buttons.move_child(l, _menu_buttons.get_child_count() - 1)
+
+
+## 전적 화면: 무기별 승률 막대 + 난이도별 + 연승·가장 빠른 승리
+func _add_records() -> void:
+	var r := Records.load_all()
+	var t := Records.totals(r)
+	_menu_title.text = "전적"
+	_menu_sub.text = "모두 %d승 %d패   ·   지금 %d연승   ·   가장 긴 연승 %d" % [t.x, t.y, r.streak, r.best_streak]
+	var grid := GridContainer.new()
+	grid.columns = 3
+	grid.add_theme_constant_override("h_separation", 16)
+	grid.add_theme_constant_override("v_separation", 6)
+	for w in Weapons.ORDER:
+		_record_row(grid, Weapons.display_name(w), r.weapons.get(w, [0, 0]))
+	for i in 3:
+		var gap := Control.new()
+		gap.custom_minimum_size = Vector2(0, 10)
+		grid.add_child(gap)
+	for d in ["easy", "normal", "hard"]:
+		var name: String = Duelist.DIFFICULTY_NAMES[d]
+		var fast := float(r.fastest.get(d, 0.0))
+		if fast > 0.0:
+			name += "  (최단 %s)" % Records.clock(fast)
+		_record_row(grid, name, r.diffs.get(d, [0, 0]))
+	var center := CenterContainer.new()
+	center.add_child(grid)
+	_menu_buttons.add_child(center)
+
+
+func _record_row(grid: GridContainer, title: String, rec: Array) -> void:
+	var k := Label.new()
+	k.text = title
+	k.add_theme_font_size_override("font_size", 17)
+	k.custom_minimum_size = Vector2(190, 0)
+	grid.add_child(k)
+	var games := int(rec[0]) + int(rec[1])
+	var bar := ProgressBar.new()
+	bar.max_value = 1.0
+	bar.step = 0.0
+	bar.value = float(rec[0]) / games if games > 0 else 0.0
+	bar.show_percentage = false
+	bar.custom_minimum_size = Vector2(220, 12)
+	bar.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(1, 1, 1, 0.1)
+	bg.set_corner_radius_all(4)
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = Color(1.0, 0.8, 0.4)
+	fill.set_corner_radius_all(4)
+	bar.add_theme_stylebox_override("background", bg)
+	bar.add_theme_stylebox_override("fill", fill)
+	grid.add_child(bar)
+	var v := Label.new()
+	v.text = Records.line(rec)
+	v.add_theme_font_size_override("font_size", 17)
+	v.add_theme_color_override("font_color", Color(1, 1, 1, 0.9 if games > 0 else 0.45))
+	v.custom_minimum_size = Vector2(150, 0)
+	grid.add_child(v)
+
+
+# ---------------- 끝내기 연출 ----------------
+
+var _bars: Array[ColorRect] = []
+
+
+## 결정타 연출: 위아래 검은 띠가 들어오고, 싸울 때 쓰던 막대와 조준점은 숨긴다
+func cinematic(on: bool) -> void:
+	var view := get_viewport().get_visible_rect().size
+	if on and _bars.is_empty():
+		for i in 2:
+			var b := ColorRect.new()
+			b.color = Color(0, 0, 0)
+			b.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			b.position = Vector2(0, 0.0 if i == 0 else view.y)
+			b.size = Vector2(view.x, 0)
+			_root.add_child(b)
+			_root.move_child(b, _big_label.get_index())
+			_bars.append(b)
+	for c in _root.get_children():
+		if c == _big_label or c == _overlay or c in _bars or c == _vignette or c == _flash_rect:
+			continue
+		if c is CanvasItem:
+			c.visible = not on
+	var h := view.y * 0.1 if on else 0.0
+	var tw := create_tween().set_parallel(true).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	tw.set_speed_scale(1.0 / maxf(Engine.time_scale, 0.05))   # 느린 화면에서도 제 빠르기로
+	for i in _bars.size():
+		tw.tween_property(_bars[i], "size:y", h, 0.35)
+		if i == 1:
+			tw.tween_property(_bars[i], "position:y", view.y - h, 0.35)
+
+
+var _flash_rect: ColorRect
+
+
+## 화면이 번쩍 (결정타)
+func flash(color: Color, seconds: float) -> void:
+	if _flash_rect == null:
+		_flash_rect = ColorRect.new()
+		_flash_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_flash_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_root.add_child(_flash_rect)
+		_root.move_child(_flash_rect, _overlay.get_index())
+	_flash_rect.color = color
+	_flash_rect.modulate.a = 1.0
+	var tw := create_tween()
+	tw.set_speed_scale(1.0 / maxf(Engine.time_scale, 0.05))
+	tw.tween_property(_flash_rect, "modulate:a", 0.0, seconds)
 
 
 ## 잠깐 화면을 검게 가린다 (그 사이 효과를 미리 그려 둠).
@@ -761,13 +940,13 @@ func show_event(text: String, color: Color) -> void:
 	tw.tween_property(_event_label, "modulate:a", 0.0, 0.35)
 
 
-func show_big(text: String, color: Color) -> void:
+func show_big(text: String, color: Color, hold := 0.35) -> void:
 	_big_label.text = text
 	_big_label.modulate = color
 	_big_label.scale = Vector2(1.4, 1.4)
 	var tw := create_tween()
 	tw.tween_property(_big_label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	tw.tween_interval(0.35)
+	tw.tween_interval(hold)
 	tw.tween_property(_big_label, "modulate:a", 0.0, 0.2)
 
 

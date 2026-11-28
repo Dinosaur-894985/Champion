@@ -14,6 +14,8 @@ static var opponent_preset := "검객"
 static var current_opponent: CharacterBuild = null
 ## AI 난이도 "easy" / "normal" / "hard". 비어 있으면 기록 파일에서 읽는다 (처음엔 보통)
 static var difficulty := ""
+## 대결 결과를 전적에 남기나 (점검에서 끌 수 있다)
+static var record_results := true
 ## 점검용: 정해 두면 저장된 캐릭터 대신 이 캐릭터로 시작한다
 static var test_player_build: CharacterBuild = null
 
@@ -26,6 +28,17 @@ var hud: CanvasLayer
 var hits := 0
 var knockdowns := 0
 var round_over := false
+## 이번 판 기록 (결과 화면에 보여 준다)
+var stats := {"dealt": 0, "taken": 0, "hits": 0, "perfect": 0, "dodged": 0, "combo": 0, "specials": 0}
+var round_time := 0.0
+var _enemy_hp_seen := 0
+## 끝내기 연출: 실제 흐른 시간(초)으로 진행한다 (게임 시간은 느려지니까)
+var _cine_t := -1.0
+var _cine_step := 0
+var _cine_won := false
+var _cine_cam: Camera3D
+var _cine_from := Vector3.ZERO
+var _cine_to := Vector3.ZERO
 
 
 func _ready() -> void:
@@ -148,6 +161,24 @@ func _setup_duel() -> void:
 	duelist.combat_event.connect(hud.show_event)
 	duelist.died.connect(_on_round_end.bind(true))
 	player.died.connect(_on_round_end.bind(false))
+	# 결과 화면에 쓸 이번 판 기록
+	_enemy_hp_seen = duelist.hp
+	duelist.hp_changed.connect(_on_enemy_hp)
+	var seen := [player.hp]
+	player.hp_changed.connect(func(v: int, _m: int):
+		if v < seen[0]:
+			stats.taken += seen[0] - v   # 넘치는 피해는 세지 않는다
+		seen[0] = v)
+	player.attack_received.connect(func(r: String):
+		if r in ["blocked", "parried"]:
+			stats.perfect += 1
+		elif r == "dodged":
+			stats.dodged += 1)
+	player.attack_started.connect(func(kind: String):
+		if kind == "special":
+			stats.specials += 1
+		else:
+			stats.combo = maxi(stats.combo, player._combo_step))
 	player.controls_enabled = false
 
 
@@ -210,6 +241,22 @@ func _countdown() -> void:
 	arena.director.running = true
 
 
+func _on_enemy_hp(v: int, _m: int) -> void:
+	if v < _enemy_hp_seen:
+		stats.dealt += _enemy_hp_seen - v
+		stats.hits += 1
+	_enemy_hp_seen = v
+
+
+func _process(delta: float) -> void:
+	if mode == "duel" and not round_over and duelist and duelist.active:
+		round_time += delta
+	if _cine_t >= 0.0:
+		_cine_t += delta / maxf(Engine.time_scale, 0.01)   # 실제 흐른 시간
+		_cine_update()
+
+
+## 판이 끝났다: 전적을 남기고, 끝내기 연출(느린 화면) 뒤 결과 화면
 func _on_round_end(player_won: bool) -> void:
 	if round_over:
 		return
@@ -217,16 +264,76 @@ func _on_round_end(player_won: bool) -> void:
 	arena.director.running = false
 	duelist.active = false
 	player.controls_enabled = false
-	# 결정타 슬로모션
+	var rec := {}
+	if record_results:
+		rec = Records.add_result(player.weapon, ai_difficulty(), player_won, round_time)
+	hud.result = {"stats": stats.duplicate(), "time": round_time, "record": rec}
 	Audio.ui("ko")
 	Audio.music("", 0.8)
-	Engine.time_scale = 0.3
-	await get_tree().create_timer(0.9, true, false, true).timeout
-	Engine.time_scale = 1.0
-	hud.show_big("승리!" if player_won else "패배", Color(1.0, 0.85, 0.3) if player_won else Color(1.0, 0.35, 0.3))
-	Audio.stinger("victory" if player_won else "defeat", "menu")
-	await get_tree().create_timer(1.4, false).timeout
-	hud.show_menu("win" if player_won else "lose")
+	_cine_won = player_won
+	Engine.time_scale = 0.22 if player_won else 0.3
+	hud.cinematic(true)
+	hud.flash(Color(1, 1, 1, 0.5) if player_won else Color(0.55, 0.0, 0.0, 0.45), 0.25)
+	if player_won:
+		_start_kill_cam()
+	_cine_t = 0.0
+	_cine_step = 0
+
+
+## 이겼을 때: 1인칭 눈에서 빠져나와, 쓰러지는 상대를 옆에서 느리게 비춘다
+func _start_kill_cam() -> void:
+	var cam := player.camera
+	_cine_cam = Camera3D.new()
+	_cine_cam.fov = cam.fov
+	add_child(_cine_cam)
+	_cine_cam.global_transform = cam.global_transform
+	_cine_cam.current = true
+	player._weapon_root.visible = false   # 1인칭 칼은 내 눈 앞에만 그려 두는 것이라 숨긴다
+	_cine_from = cam.global_position
+	var target := duelist.global_position + Vector3.UP
+	var dir := target - _cine_from
+	dir.y = 0.0
+	dir = dir.normalized() if dir.length() > 0.01 else Vector3.FORWARD
+	var side := Vector3(-dir.z, 0.0, dir.x)
+	# 상대 옆쪽 비스듬한 자리 (벽에 막히면 막힌 곳 조금 앞)
+	var space := get_world_3d().direct_space_state
+	var best := Vector3.ZERO
+	var best_len := -1.0
+	for s in [1.0, -1.0]:
+		var want: Vector3 = target - dir * 2.4 + side * s * 1.9 + Vector3.UP * 0.45
+		var hit := space.intersect_ray(PhysicsRayQueryParameters3D.create(target, want, 1))
+		var pos: Vector3 = want if hit.is_empty() else target.lerp(hit.position, 0.8)
+		var len := pos.distance_to(target)
+		if len > best_len:
+			best_len = len
+			best = pos
+	_cine_to = best
+
+
+func _cine_update() -> void:
+	const SLOW := 1.7    # 이만큼 (실제 초) 느린 화면
+	const BACK := 0.45   # 그 뒤 이만큼 동안 제 빠르기로 돌아온다
+	var slow := 0.22 if _cine_won else 0.3
+	if _cine_t < SLOW:
+		Engine.time_scale = slow
+	else:
+		Engine.time_scale = lerpf(slow, 1.0, clampf((_cine_t - SLOW) / BACK, 0.0, 1.0))
+	if _cine_cam and is_instance_valid(duelist):
+		var k := clampf(_cine_t / (SLOW + BACK), 0.0, 1.0)
+		k = 1.0 - pow(1.0 - k, 3.0)   # 처음엔 빠르게, 끝엔 천천히 멈춘다
+		var look := duelist.rig.global_position + Vector3.UP * lerpf(1.1, 0.6, k)
+		_cine_cam.global_position = _cine_from.lerp(_cine_to, k)
+		if _cine_cam.global_position.distance_to(look) > 0.2:
+			_cine_cam.look_at(look)
+	if _cine_step == 0 and _cine_t >= SLOW + 0.15:
+		_cine_step = 1
+		hud.show_big("승리!" if _cine_won else "패배", Color(1.0, 0.85, 0.3) if _cine_won else Color(1.0, 0.35, 0.3), 1.0)
+		Audio.stinger("victory" if _cine_won else "defeat", "menu")
+	if _cine_step == 1 and _cine_t >= SLOW + 1.9:
+		_cine_step = 2
+		_cine_t = -1.0
+		Engine.time_scale = 1.0
+		hud.show_menu("win" if _cine_won else "lose")
 
 
 func _on_menu_choice(choice: String) -> void:
@@ -252,6 +359,8 @@ func _on_menu_choice(choice: String) -> void:
 			hud.show_menu("presets")
 		"settings":
 			hud.open_settings()
+		"records":
+			hud.show_menu("records")
 		"back":
 			hud.go_back()
 		"build":
