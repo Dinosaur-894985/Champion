@@ -32,6 +32,7 @@ func _initialize() -> void:
 	var b := CharacterBuild.preset("검객")
 	b.weapon = _weapon
 	Game.test_player_build = b
+	Game.arena_choice = "sky"
 	Game.next_mode = "tutorial"
 	_game = GAME.instantiate()
 	root.add_child(_game)

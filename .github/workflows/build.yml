@@ -43,6 +43,11 @@ jobs:
           godot --headless --fixed-fps 60 -s res://tests/smoke_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee smoke.log
           grep -q "SMOKE => OK" smoke.log
 
+      - name: 자동 점검 (노을 정원 경기장)
+        run: |
+          godot --headless --fixed-fps 60 -s res://tests/smoke_test.gd -- arena=garden 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee smoke_garden.log
+          grep -q "SMOKE => OK" smoke_garden.log
+
       - name: 자동 점검 (높이, 낙하 찍기, 난간, 짚라인, 아이템, 바닥 붕괴)
         run: |
           godot --headless --fixed-fps 60 -s res://tests/vertical_test.gd 2>&1 | grep -vE 'Parameter "m" is null|mesh_get_surface_count' | tee vertical.log

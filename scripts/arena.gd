@@ -114,6 +114,40 @@ const LAUNCH_PADS := [
 ## 낭떠러지에 떨어진 뒤 다시 서는 자리
 const SAFE_SPOTS := [Vector3(0, 0.1, 4.5), Vector3(0, 0.1, -4.5), Vector3(-2.2, 0.1, 0), Vector3(2.2, 0.1, 0)]
 
+# ---------------- 경기장 종류 ----------------
+## "sky"    하늘 경기장: 한낮, 하늘 위에 뜬 돌 경기장 (처음 경기장)
+## "garden" 노을 정원: 해 질 녘 호수 위 절벽 정원. 같은 뼈대를 90도 돌려 놓아 길이 다르고,
+##          색·빛·풍경(호수, 꽃나무, 떠다니는 등불)이 다르다.
+## 색 이름은 역할 이름이다 (teal = 첫째 강조색, coral = 둘째, navy = 짙은 색, gold = 반짝이 장식).
+const THEMES := {
+	"sky": {"name": "하늘 경기장", "turn": 0,
+		"pal": {"floor_a": C_FLOOR_A, "floor_b": C_FLOOR_B, "grout": C_GROUT, "teal": C_TEAL, "coral": C_CORAL,
+			"navy": C_NAVY, "gold": C_GOLD, "stone": C_STONE, "stone2": C_STONE2, "rock": C_ROCK,
+			"leaf": Color(0.36, 0.60, 0.38), "sand": Color(0.86, 0.76, 0.60), "window": Color(0.16, 0.24, 0.32)}},
+	"garden": {"name": "노을 정원", "turn": 1,
+		"pal": {"floor_a": Color(0.89, 0.81, 0.72), "floor_b": Color(0.85, 0.77, 0.68), "grout": Color(0.68, 0.56, 0.52),
+			"teal": Color(0.38, 0.58, 0.46), "coral": Color(0.97, 0.58, 0.42), "navy": Color(0.34, 0.22, 0.40),
+			"gold": Color(0.98, 0.80, 0.42), "stone": Color(0.95, 0.90, 0.85), "stone2": Color(0.82, 0.74, 0.70),
+			"rock": Color(0.55, 0.45, 0.50), "leaf": Color(0.95, 0.62, 0.70), "sand": Color(0.92, 0.82, 0.70),
+			"window": Color(0.30, 0.20, 0.30)}},
+}
+const THEME_ORDER := ["sky", "garden"]
+## 하늘과 빛 (Game._build_environment 가 쓴다). 웹은 거기서 따로 조금 눌러 준다.
+const ENV := {
+	"sky": {"top": Color(0.30, 0.58, 0.90), "horizon": Color(0.86, 0.90, 0.93), "ground_h": Color(0.80, 0.82, 0.78),
+		"ground_b": Color(0.45, 0.52, 0.40), "ambient": Color(0.86, 0.84, 0.80), "fog": Color(0.84, 0.88, 0.93),
+		"fog_density": 0.004, "sun_rot": Vector3(-52, -30, 0), "sun": Color(1.0, 0.94, 0.84), "sun_energy": 1.0,
+		"saturation": 1.08},
+	"garden": {"top": Color(0.30, 0.44, 0.82), "horizon": Color(1.0, 0.82, 0.62), "ground_h": Color(0.98, 0.78, 0.62),
+		"ground_b": Color(0.50, 0.42, 0.58), "ambient": Color(0.90, 0.86, 0.84), "fog": Color(0.98, 0.86, 0.76),
+		"fog_density": 0.0025, "sun_rot": Vector3(-34, 115, 0), "sun": Color(1.0, 0.86, 0.68), "sun_energy": 1.1,
+		"saturation": 1.16},
+}
+
+var theme := "sky"              # Game 이 add_child 전에 정한다
+var _pal := {}                  # 지금 경기장 색
+var _lay := {}                  # 지금 경기장 표 (BLOCKS 등을 돌려 놓은 것)
+
 var fighters: Array = []        # 플레이어와 AI (Game 이 넣어 준다)
 var director: ArenaDirector
 var lifts: Array[ArenaLift] = []
@@ -140,8 +174,9 @@ var _obstacles := []                # 바닥에서 지나갈 수 없는 사각�
 
 
 func _ready() -> void:
+	_setup_theme()
 	_make_materials()
-	for b in BLOCKS:
+	for b in _lay.blocks:
 		_blocks[b.id] = b
 	for i in RINGS.size():
 		var r := Node3D.new()
@@ -150,21 +185,21 @@ func _ready() -> void:
 		_rings.append(r)
 		_ring_bodies[i] = []
 	_build_floor()
-	for b in BLOCKS:
+	for b in _lay.blocks:
 		_cur = _rings[block_ring(b)]
 		_build_block(b)
-	for r in RAMPS:
+	for r in _lay.ramps:
 		_cur = _rings[ring_of(r.from)]
 		_build_ramp(r)
 	_cur = _rings[0]
-	for l in LIFTS:
+	for l in _lay.lifts:
 		_build_lift(l)
-	for z in ZIPLINES:
+	for z in _lay.ziplines:
 		var zl := Zipline.new()
 		add_child(zl)
 		zl.setup(z.id, z.a, z.b, _mats)
 		ziplines.append(zl)
-	for pd in LAUNCH_PADS:
+	for pd in _lay.pads:
 		var pad := LaunchPad.new()
 		var c: Vector2 = pd.c
 		_rings[ring_of(Vector3(c.x, 0, c.y))].add_child(pad)
@@ -192,18 +227,95 @@ func set_fighters(list: Array) -> void:
 		pd.fighters = list
 
 
+## 경기장 종류에 맞게 색과 표를 준비한다. 표는 가운데를 축으로 90도씩 돌린다 (turn).
+func _setup_theme() -> void:
+	if not THEMES.has(theme):
+		theme = "sky"
+	var t: Dictionary = THEMES[theme]
+	_pal = t.pal
+	var turn: int = t.turn
+	var blocks := []
+	for b in BLOCKS:
+		var nb: Dictionary = b.duplicate()
+		nb.c = _rot2(b.c, turn)
+		if turn % 2 == 1:
+			nb.s = Vector2(b.s.y, b.s.x)
+		blocks.append(nb)
+	var ramps := []
+	for r in RAMPS:
+		var nr: Dictionary = r.duplicate()
+		nr.from = _rot3(r.from, turn)
+		nr.to = _rot3(r.to, turn)
+		ramps.append(nr)
+	var lifts_t := []
+	for l in LIFTS:
+		var nl: Dictionary = l.duplicate()
+		nl.c = _rot2(l.c, turn)
+		lifts_t.append(nl)
+	var zips := []
+	for z in ZIPLINES:
+		var nz: Dictionary = z.duplicate()
+		nz.a = _rot3(z.a, turn)
+		nz.b = _rot3(z.b, turn)
+		zips.append(nz)
+	var pads_t := []
+	for pd in LAUNCH_PADS:
+		var np: Dictionary = pd.duplicate()
+		np.c = _rot2(pd.c, turn)
+		np.to = _rot3(pd.to, turn)
+		pads_t.append(np)
+	var safe := []
+	for sp in SAFE_SPOTS:
+		safe.append(_rot3(sp, turn))
+	_lay = {"blocks": blocks, "ramps": ramps, "lifts": lifts_t, "ziplines": zips, "pads": pads_t,
+		"safe_spots": safe, "jump_links": JUMP_LINKS, "top_links": TOP_LINKS, "turn": turn}
+
+
+## 위에서 볼 때 가운데를 축으로 90도씩 돌린다 ((x, z) → (-z, x))
+static func _rot2(v: Vector2, turn: int) -> Vector2:
+	for i in turn:
+		v = Vector2(-v.y, v.x)
+	return v
+
+
+static func _rot3(v: Vector3, turn: int) -> Vector3:
+	var f := _rot2(Vector2(v.x, v.z), turn)
+	return Vector3(f.x, v.y, f.y)
+
+
+## 하늘 경기장 기준 자리 → 이 경기장의 같은 자리 (시작 자리, 허수아비 자리 등)
+func place(v: Vector3) -> Vector3:
+	return _rot3(v, _lay.turn)
+
+
+## 하늘 경기장 기준 바라보는 방향(rotation.y) → 이 경기장
+func yaw(a: float) -> float:
+	return a - int(_lay.turn) * PI * 0.5
+
+
+## 지금 경기장 이름 (메뉴, 점검용)
+static func theme_name(t: String) -> String:
+	return str(THEMES.get(t, THEMES.sky).name)
+
+
 func _make_materials() -> void:
-	_mats.stone = LowPoly.mat(C_STONE, 0.9)
-	_mats.stone2 = LowPoly.mat(C_STONE2, 0.9)
-	_mats.teal = LowPoly.mat(C_TEAL, 0.75)
-	_mats.coral = LowPoly.mat(C_CORAL, 0.8)
-	_mats.navy = LowPoly.mat(C_NAVY, 0.7)
-	_mats.gold = LowPoly.mat(C_GOLD, 0.55, 0.3)   # 너무 매끈하면 작은 금장식이 화면을 돌릴 때 번쩍거린다
-	_mats.sand = LowPoly.mat(Color(0.86, 0.76, 0.60), 0.9)
-	_mats.rock = LowPoly.mat(C_ROCK, 0.95)
-	_mats.rock2 = LowPoly.mat(C_ROCK.darkened(0.15), 0.95)
-	_mats.window = LowPoly.mat(Color(0.16, 0.24, 0.32), 0.25, 0.2)
-	_mats.leaf = LowPoly.mat(Color(0.36, 0.60, 0.38), 0.9)
+	_mats.stone = LowPoly.mat(_pal.stone, 0.9)
+	_mats.stone2 = LowPoly.mat(_pal.stone2, 0.9)
+	_mats.teal = LowPoly.mat(_pal.teal, 0.75)
+	_mats.coral = LowPoly.mat(_pal.coral, 0.8)
+	_mats.navy = LowPoly.mat(_pal.navy, 0.7)
+	_mats.gold = LowPoly.mat(_pal.gold, 0.55, 0.3)   # 너무 매끈하면 작은 금장식이 화면을 돌릴 때 번쩍거린다
+	_mats.sand = LowPoly.mat(_pal.sand, 0.9)
+	_mats.rock = LowPoly.mat(_pal.rock, 0.95)
+	_mats.rock2 = LowPoly.mat(_pal.rock.darkened(0.15), 0.95)
+	_mats.window = LowPoly.mat(_pal.window, 0.25, 0.2)
+	_mats.leaf = LowPoly.mat(_pal.leaf, 0.9)
+	var glow := StandardMaterial3D.new()   # 안에서 빛나는 등불 (노을 정원)
+	glow.albedo_color = Color(1.0, 0.80, 0.55)
+	glow.emission_enabled = true
+	glow.emission = Color(1.0, 0.64, 0.34)
+	glow.emission_energy_multiplier = 1.4
+	_mats.glow = glow
 	var vc := StandardMaterial3D.new()
 	vc.vertex_color_use_as_albedo = true
 	vc.vertex_color_is_srgb = true
@@ -276,7 +388,7 @@ func collapse_ring(r: int) -> void:
 		var p: Vector3 = Vector3(cos(a), 0, sin(a)) * d
 		p.x = clampf(p.x, -RINGS[r], RINGS[r])
 		p.z = clampf(p.z, -RINGS[r], RINGS[r])
-		Fx.impact(self, p + Vector3.UP * 0.2, Vector3.UP, C_FLOOR_A, 12)
+		Fx.impact(self, p + Vector3.UP * 0.2, Vector3.UP, _pal.floor_a, 12)
 	var tw := create_tween().set_parallel(true)
 	tw.tween_property(ring, "position:y", -60.0, 3.2).set_ease(Tween.EASE_IN).set_trans(Tween.TRANS_QUAD)
 	tw.tween_property(ring, "rotation:x", deg_to_rad(randf_range(-4, 4)), 3.2).set_ease(Tween.EASE_IN)
@@ -320,37 +432,37 @@ func _build_floor() -> void:
 			var r := ring_of(Vector3(x0 + tile * 0.5, 0, z0 + tile * 0.5))
 			var st: SurfaceTool = sts[r]
 			var h := (ix * 7 + iz * 13) % 5
-			var c := C_FLOOR_A if (ix + iz) % 2 == 0 else C_FLOOR_B
+			var c: Color = _pal.floor_a if (ix + iz) % 2 == 0 else _pal.floor_b
 			c = c.darkened(h * 0.008 + r * 0.012)
 			# 줄눈과 타일은 같은 높이에 겹치지 않게 나란히 깐다 (겹쳐 깔면 멀리서 깜빡인다)
 			var g := 0.05
 			_quad(st, Vector3(x0 + g, 0, z0 + g), Vector3(x0 + tile - g, 0, z0 + tile - g), c)
-			_quad(st, Vector3(x0, 0, z0), Vector3(x0 + tile, 0, z0 + g), C_GROUT)
-			_quad(st, Vector3(x0, 0, z0 + tile - g), Vector3(x0 + tile, 0, z0 + tile), C_GROUT)
-			_quad(st, Vector3(x0, 0, z0 + g), Vector3(x0 + g, 0, z0 + tile - g), C_GROUT)
-			_quad(st, Vector3(x0 + tile - g, 0, z0 + g), Vector3(x0 + tile, 0, z0 + tile - g), C_GROUT)
+			_quad(st, Vector3(x0, 0, z0), Vector3(x0 + tile, 0, z0 + g), _pal.grout)
+			_quad(st, Vector3(x0, 0, z0 + tile - g), Vector3(x0 + tile, 0, z0 + tile), _pal.grout)
+			_quad(st, Vector3(x0, 0, z0 + g), Vector3(x0 + g, 0, z0 + tile - g), _pal.grout)
+			_quad(st, Vector3(x0 + tile - g, 0, z0 + g), Vector3(x0 + tile, 0, z0 + tile - g), _pal.grout)
 	# 고리 경계 띠 (바깥 고리에 속해서 같이 무너진다)
 	for r in range(1, RINGS.size()):
 		var d: float = RINGS[r - 1]
 		var st: SurfaceTool = sts[r]
 		var w := 0.28
-		_quad(st, Vector3(-d - w, 0.012, -d - w), Vector3(d + w, 0.012, -d), C_CORAL)
-		_quad(st, Vector3(-d - w, 0.012, d), Vector3(d + w, 0.012, d + w), C_CORAL)
-		_quad(st, Vector3(-d - w, 0.012, -d), Vector3(-d, 0.012, d), C_CORAL)
-		_quad(st, Vector3(d, 0.012, -d), Vector3(d + w, 0.012, d), C_CORAL)
+		_quad(st, Vector3(-d - w, 0.012, -d - w), Vector3(d + w, 0.012, -d), _pal.coral)
+		_quad(st, Vector3(-d - w, 0.012, d), Vector3(d + w, 0.012, d + w), _pal.coral)
+		_quad(st, Vector3(-d - w, 0.012, -d), Vector3(-d, 0.012, d), _pal.coral)
+		_quad(st, Vector3(d, 0.012, -d), Vector3(d + w, 0.012, d), _pal.coral)
 	# 맨 바깥 가장자리: 금색 테두리 (벽이 없다는 표시)
 	var o: float = HALF
 	var edge: SurfaceTool = sts[RINGS.size() - 1]
-	_quad(edge, Vector3(-o, 0.012, -o), Vector3(o, 0.012, -o + 0.35), C_GOLD)
-	_quad(edge, Vector3(-o, 0.012, o - 0.35), Vector3(o, 0.012, o), C_GOLD)
-	_quad(edge, Vector3(-o, 0.012, -o), Vector3(-o + 0.35, 0.012, o), C_GOLD)
-	_quad(edge, Vector3(o - 0.35, 0.012, -o), Vector3(o, 0.012, o), C_GOLD)
+	_quad(edge, Vector3(-o, 0.012, -o), Vector3(o, 0.012, -o + 0.35), _pal.gold)
+	_quad(edge, Vector3(-o, 0.012, o - 0.35), Vector3(o, 0.012, o), _pal.gold)
+	_quad(edge, Vector3(-o, 0.012, -o), Vector3(-o + 0.35, 0.012, o), _pal.gold)
+	_quad(edge, Vector3(o - 0.35, 0.012, -o), Vector3(o, 0.012, o), _pal.gold)
 	# 가운데 결투 원
 	var core: SurfaceTool = sts[0]
-	_ring_mesh(core, 0.0, 8.0, 0.012, C_FLOOR_A, 48)
-	_ring_mesh(core, 7.4, 8.0, 0.024, C_CORAL, 48)
-	_ring_mesh(core, 6.9, 7.05, 0.024, C_NAVY, 48)
-	_ring_mesh(core, 2.4, 2.7, 0.024, C_GOLD, 32)
+	_ring_mesh(core, 0.0, 8.0, 0.012, _pal.floor_a, 48)
+	_ring_mesh(core, 7.4, 8.0, 0.024, _pal.coral, 48)
+	_ring_mesh(core, 6.9, 7.05, 0.024, _pal.navy, 48)
+	_ring_mesh(core, 2.4, 2.7, 0.024, _pal.gold, 32)
 	for k in 8:
 		var a := TAU * k / 8.0 + PI / 8.0
 		var dd := Vector3(cos(a), 0, sin(a))
@@ -358,10 +470,10 @@ func _build_floor() -> void:
 		var p1 := dd * 2.9
 		var p2 := dd * 6.7
 		var up := Vector3.UP * 0.024
-		_tri(core, p1 - side + up, p2 - side + up, p2 + side + up, C_TEAL)
-		_tri(core, p1 - side + up, p2 + side + up, p1 + side + up, C_TEAL)
-	_ring_mesh(core, 0.0, 1.2, 0.024, C_NAVY, 8)
-	_ring_mesh(core, 0.0, 0.5, 0.036, C_GOLD, 8)
+		_tri(core, p1 - side + up, p2 - side + up, p2 + side + up, _pal.teal)
+		_tri(core, p1 - side + up, p2 + side + up, p1 + side + up, _pal.teal)
+	_ring_mesh(core, 0.0, 1.2, 0.024, _pal.navy, 8)
+	_ring_mesh(core, 0.0, 0.5, 0.036, _pal.gold, 8)
 
 	for r in RINGS.size():
 		var mi := MeshInstance3D.new()
@@ -402,6 +514,16 @@ func _build_floor() -> void:
 			var along := k * 7.5
 			var sgn := -1.0 if side % 2 == 0 else 1.0
 			var p := Vector3(along, 0, sgn * (HALF - 0.4)) if side < 2 else Vector3(sgn * (HALF - 0.4), 0, along)
+			if theme == "garden":
+				# 노을 정원: 깃대 대신 돌 등불
+				var lamp := Node3D.new()
+				lamp.position = p
+				_rings[3].add_child(lamp)
+				LowPoly.part(lamp, LowPoly.box(Vector3(0.5, 0.25, 0.5)), _mats.stone2, Vector3(0, 0.12, 0))
+				LowPoly.part(lamp, LowPoly.box(Vector3(0.22, 1.1, 0.22)), _mats.stone, Vector3(0, 0.8, 0))
+				LowPoly.part(lamp, LowPoly.box(Vector3(0.46, 0.4, 0.46)), _mats.glow, Vector3(0, 1.55, 0))
+				LowPoly.part(lamp, LowPoly.prism(Vector3(0.8, 0.35, 0.8)), _mats.navy, Vector3(0, 1.93, 0))
+				continue
 			var color: Material = _mats.coral if (k + side) % 2 == 0 else _mats.teal
 			var flag := Node3D.new()
 			flag.position = p
@@ -505,6 +627,18 @@ func _style_pillar(center: Vector3, size: Vector3) -> void:
 	_holds(center, size, bottom + 0.8, int(size.y) - 1)
 
 
+## 구조물에서 경기장 가운데를 보는 면: {"dir": 바깥에서 가운데로 향하는 축 방향, "half": 그 면까지 거리}
+static func _face_in(c: Vector2, size: Vector3) -> Dictionary:
+	if absf(c.x) >= absf(c.y):
+		return {"dir": Vector3(-signf(c.x), 0, 0), "half": size.x * 0.5}
+	return {"dir": Vector3(0, 0, -signf(c.y)), "half": size.z * 0.5}
+
+
+## x 를 따라 놓을 크기를, along_x 가 아니면 z 를 따라 놓도록 바꾼다
+static func _axis(along_x: bool, v: Vector3) -> Vector3:
+	return v if along_x else Vector3(v.z, v.y, v.x)
+
+
 ## 벽에 박힌 작은 돌 손잡이: 이 벽은 타고 오를 수 있다는 표시
 func _holds(center: Vector3, size: Vector3, from_y: float, rows: int) -> void:
 	for f in 4:
@@ -531,15 +665,21 @@ func _style_house(center: Vector3, size: Vector3, b: Dictionary) -> void:
 		for sz in [-1.0, 1.0]:
 			_part(LowPoly.box(Vector3(0.45, 0.25, 0.45)), _mats.gold, Vector3(center.x + sx * (size.x * 0.5 - 0.22), top + 0.12, center.z + sz * (size.z * 0.5 - 0.22)))
 	# 창문과 문: 경기장 가운데를 보는 면
-	var face := -signf(b.c.x)
-	var fx := center.x + face * (size.x * 0.5 + 0.02)
+	var f := _face_in(b.c, size)
+	var face: Vector3 = f.dir
+	var x_face := face.x != 0.0     # 벽면이 x 쪽을 보나 (그러면 창은 z 를 따라 늘어선다)
+	var along := Vector3.BACK if x_face else Vector3.RIGHT
+	var fp: Vector3 = Vector3(center.x, 0, center.z) + face * (float(f.half) + 0.02)
 	for k in [-2.6, 0.0, 2.6]:
 		var wy := top - 1.2
-		_part(LowPoly.box(Vector3(0.06, 0.8, 1.0)), _mats.window, Vector3(fx, wy, center.z + k))
-		_part(LowPoly.box(Vector3(0.1, 0.12, 1.3)), _mats.coral, Vector3(fx + face * 0.05, wy + 0.5, center.z + k))
-	_part(LowPoly.box(Vector3(0.06, 1.9, 1.3)), _mats.navy, Vector3(fx, bottom + 0.95, center.z - 1.3))
-	var aw := _part(LowPoly.box(Vector3(0.9, 0.08, 1.8)), _mats.coral, Vector3(fx + face * 0.4, bottom + 2.05, center.z - 1.3))
-	aw.rotation.z = face * deg_to_rad(-15)
+		_part(LowPoly.box(_axis(x_face, Vector3(0.06, 0.8, 1.0))), _mats.window, fp + along * k + Vector3.UP * wy)
+		_part(LowPoly.box(_axis(x_face, Vector3(0.1, 0.12, 1.3))), _mats.coral, fp + face * 0.05 + along * k + Vector3.UP * (wy + 0.5))
+	_part(LowPoly.box(_axis(x_face, Vector3(0.06, 1.9, 1.3))), _mats.navy, fp - along * 1.3 + Vector3.UP * (bottom + 0.95))
+	var aw := _part(LowPoly.box(_axis(x_face, Vector3(0.9, 0.08, 1.8))), _mats.coral, fp + face * 0.4 - along * 1.3 + Vector3.UP * (bottom + 2.05))
+	if x_face:
+		aw.rotation.z = face.x * deg_to_rad(-15)
+	else:
+		aw.rotation.x = face.z * deg_to_rad(15)
 	# 바깥쪽 벽에도 손잡이 (벽 타기로 오를 수 있다)
 	_holds(center, size, bottom + 0.6, int(size.y) - 1)
 
@@ -556,11 +696,16 @@ func _style_gallery(center: Vector3, size: Vector3) -> void:
 	_part(LowPoly.box(size), _mats.stone, center)
 	var top := center.y + size.y * 0.5
 	_part(LowPoly.box(Vector3(size.x + 0.08, 0.3, size.z + 0.08)), _mats.navy, Vector3(center.x, top - 0.15 + LIFT_TOP, center.z))
-	var fz := center.z + size.z * 0.5 + 0.02
+	# 경기장 가운데를 보는 면에 아치 문
+	var f := _face_in(Vector2(center.x, center.z), size)
+	var face: Vector3 = f.dir
+	var x_face := face.x != 0.0
+	var along := Vector3.BACK if x_face else Vector3.RIGHT
+	var fp: Vector3 = Vector3(center.x, 0, center.z) + face * (float(f.half) + 0.02)
 	for k in range(-2, 3):
-		var x: float = center.x + k * 2.4
-		_part(LowPoly.box(Vector3(1.3, 1.3, 0.05)), _mats.teal, Vector3(x, 0.9, fz))
-		_part(LowPoly.cyl(0.65, 0.65, 0.05, 8), _mats.teal, Vector3(x, 1.55, fz), Vector3(90, 0, 0))
+		var p := fp + along * (k * 2.4)
+		_part(LowPoly.box(_axis(not x_face, Vector3(1.3, 1.3, 0.05))), _mats.teal, p + Vector3.UP * 0.9)
+		_part(LowPoly.cyl(0.65, 0.65, 0.05, 8), _mats.teal, p + Vector3.UP * 1.55, Vector3(0, 0, 90) if x_face else Vector3(90, 0, 0))
 	_holds(center, Vector3(size.x, size.y, size.z), 0.6, 2)
 
 
@@ -569,38 +714,51 @@ func _style_terrace(center: Vector3, size: Vector3) -> void:
 	var top := center.y + size.y * 0.5
 	_part(LowPoly.box(Vector3(size.x + 0.1, 0.3, size.z + 0.1)), _mats.coral, Vector3(center.x, top - 0.15 + LIFT_TOP, center.z))
 	_part(LowPoly.box(Vector3(size.x - 1.0, 0.02, size.z - 1.0)), _mats.sand, Vector3(center.x, top + 0.01 + LIFT_TOP * 2.0, center.z))
-	var fz := center.z - size.z * 0.5 - 0.02
+	var f := _face_in(Vector2(center.x, center.z), size)
+	var face: Vector3 = f.dir
+	var x_face := face.x != 0.0
+	var along := Vector3.BACK if x_face else Vector3.RIGHT
+	var fp: Vector3 = Vector3(center.x, 0, center.z) + face * (float(f.half) + 0.02)
 	for k in range(-1, 2):
-		_part(LowPoly.box(Vector3(1.6, 1.0, 0.05)), _mats.navy, Vector3(center.x + k * 3.0, 1.0, fz))
+		_part(LowPoly.box(_axis(not x_face, Vector3(1.6, 1.0, 0.05))), _mats.navy, fp + along * (k * 3.0) + Vector3.UP * 1.0)
 
 
 func _style_bridge(center: Vector3, size: Vector3) -> void:
 	_part(LowPoly.box(size), _mats.stone, center)
 	var top := center.y + size.y * 0.5
 	var bottom := center.y - size.y * 0.5
+	var lx := size.x >= size.z      # 다리가 x 를 따라 길다
+	var long_ax := Vector3.RIGHT if lx else Vector3.BACK
+	var short_ax := Vector3.BACK if lx else Vector3.RIGHT
+	var long_len := size.x if lx else size.z
+	var short_len := size.z if lx else size.x
+	var c0 := Vector3(center.x, 0, center.z)
 	# 가장자리 산호색 띠: 난간이 없다는 표시
 	for s in [-1.0, 1.0]:
-		_part(LowPoly.box(Vector3(size.x, 0.06, 0.16)), _mats.coral, Vector3(center.x, top + 0.02, center.z + s * (size.z * 0.5 - 0.08)))
+		_part(LowPoly.box(_axis(lx, Vector3(long_len, 0.06, 0.16))), _mats.coral, c0 + short_ax * s * (short_len * 0.5 - 0.08) + Vector3.UP * (top + 0.02))
 	# 밑을 받치는 들보와 아래로 드리운 천 (밑에서 올려다볼 때 보기 좋게)
 	for k in range(-2, 3):
-		var x: float = center.x + k * 2.4
-		_part(LowPoly.box(Vector3(0.3, 0.3, size.z + 0.1)), _mats.navy, Vector3(x, bottom - 0.15, center.z))
+		_part(LowPoly.box(_axis(lx, Vector3(0.3, 0.3, short_len + 0.1))), _mats.navy, c0 + long_ax * (k * 2.4) + Vector3.UP * (bottom - 0.15))
 	for k in [-1, 1]:
-		var banner := _part(LowPoly.box(Vector3(1.2, 1.6, 0.04)), _mats.teal if k < 0 else _mats.coral, Vector3(center.x + k * 2.4, bottom - 0.9, center.z))
+		var m: Material = _mats.teal if k < 0 else _mats.coral
+		var banner := _part(LowPoly.box(_axis(lx, Vector3(1.2, 1.6, 0.04))), m, c0 + long_ax * (k * 2.4) + Vector3.UP * (bottom - 0.9))
 		banner.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_part(LowPoly.prism(Vector3(1.2, 0.4, 0.04)), _mats.teal if k < 0 else _mats.coral, Vector3(center.x + k * 2.4, bottom - 1.9, center.z), Vector3(0, 0, 180))
+		_part(LowPoly.prism(Vector3(1.2, 0.4, 0.04)), m, c0 + long_ax * (k * 2.4) + Vector3.UP * (bottom - 1.9), Vector3(0, 0 if lx else 90, 180))
 
 
 func _style_runwall(center: Vector3, size: Vector3) -> void:
 	_part(LowPoly.box(size), _mats.coral, center)
 	var top := center.y + size.y * 0.5
 	_part(LowPoly.box(Vector3(size.x + 0.08, 0.25, size.z + 0.08)), _mats.navy, Vector3(center.x, top - 0.125 + LIFT_TOP, center.z))
+	var thin_x := size.x <= size.z   # 벽이 x 쪽으로 얇다 (z 를 따라 길다)
+	var n_ax := Vector3.RIGHT if thin_x else Vector3.BACK
+	var l_ax := Vector3.BACK if thin_x else Vector3.RIGHT
+	var half_n := (size.x if thin_x else size.z) * 0.5
 	for side in [-1.0, 1.0]:
-		var x: float = center.x + side * (size.x * 0.5 + 0.02)
 		for k in range(-2, 3):
-			var z := center.z + k * 1.1
-			var chev := _part(LowPoly.prism(Vector3(0.7, 0.5, 0.04)), _mats.stone, Vector3(x, 1.9, z))
-			chev.rotation = Vector3(0, PI * 0.5, PI * 0.5)
+			var p: Vector3 = Vector3(center.x, 1.9, center.z) + n_ax * side * (half_n + 0.02) + l_ax * (k * 1.1)
+			var chev := _part(LowPoly.prism(Vector3(0.7, 0.5, 0.04)), _mats.stone, p)
+			chev.rotation = Vector3(0, PI * 0.5, PI * 0.5) if thin_x else Vector3(0, 0, PI * 0.5)
 
 
 ## 화분: 돌 화분에 네모나게 다듬은 덤불. 밟고 올라설 수 있는 낮은 엄폐물.
@@ -628,12 +786,14 @@ func _build_lift(l: Dictionary) -> void:
 	_obstacles.append(Rect2(c - Vector2.ONE * ArenaLift.SIZE * 0.5, Vector2.ONE * ArenaLift.SIZE))
 	# 발판이 오가는 길을 보여주는 기둥 (장식, 충돌 없음)
 	var h: float = l.top + 1.0
+	var along_x := absf(c.y) >= absf(c.x)   # 기둥은 다리와 나란히 선다
+	var ax := Vector3.RIGHT if along_x else Vector3.BACK
 	for sx in [-1.0, 1.0]:
-		var p := Vector3(c.x + sx * (ArenaLift.SIZE * 0.5 + 0.25), h * 0.5, c.y)
+		var p: Vector3 = Vector3(c.x, h * 0.5, c.y) + ax * sx * (ArenaLift.SIZE * 0.5 + 0.25)
 		_part(LowPoly.box(Vector3(0.18, h, 0.18)), _mats.navy, p)
 		for y in range(1, int(h), 2):
 			_part(LowPoly.box(Vector3(0.24, 0.12, 0.24)), _mats.gold, Vector3(p.x, y, p.z))
-	_part(LowPoly.box(Vector3(ArenaLift.SIZE + 0.7, 0.16, 0.2)), _mats.coral, Vector3(c.x, h, c.y))
+	_part(LowPoly.box(_axis(along_x, Vector3(ArenaLift.SIZE + 0.7, 0.16, 0.2))), _mats.coral, Vector3(c.x, h, c.y))
 
 
 func _on_pillar_broken(pid: String) -> void:
@@ -787,6 +947,9 @@ const VALLEY_Y := -34.0
 
 
 func _build_backdrop() -> void:
+	if theme == "garden":
+		_build_lake()
+		return
 	var grass := LowPoly.mat(Color(0.52, 0.68, 0.40), 0.95)
 	var grass2 := LowPoly.mat(Color(0.58, 0.72, 0.44), 0.95)
 	var bark := LowPoly.mat(Color(0.45, 0.33, 0.24), 0.95)
@@ -833,6 +996,9 @@ func _build_backdrop() -> void:
 ## 하늘 풍경: 경기장 둘레를 천천히 도는 열기구와 둥실 떠 있는 바위섬.
 ## 싸우다 고개를 들거나 높이 날아오를 때 '하늘 위 경기장'이라는 느낌이 나게 한다. 충돌은 없다.
 func _build_sky_life() -> void:
+	if theme == "garden":
+		_build_lanterns()
+		return
 	var bark := LowPoly.mat(Color(0.45, 0.33, 0.24), 0.95)
 	var grass := LowPoly.mat(Color(0.56, 0.72, 0.42), 0.95)
 	var cream := LowPoly.mat(Color(0.96, 0.92, 0.84), 0.85)
@@ -888,6 +1054,117 @@ func _build_sky_life() -> void:
 		bob.tween_property(isl, "position:y", isl.position.y, 4.0 + i * 0.7)
 
 
+# ---------------- 노을 정원 풍경 ----------------
+
+const LAKE_Y := -16.0
+
+
+## 꽃나무 한 그루 (줄기 + 분홍 꽃 덩어리 셋). parent 에 붙이고 합치는 건 부르는 쪽이 한다.
+func _blossom_tree(parent: Node3D, p: Vector3, sc: float, seed_v: int, bark: Material, petals: Array) -> void:
+	var t := Node3D.new()
+	t.position = p
+	t.rotation.y = seed_v * 0.7
+	t.scale = Vector3.ONE * sc
+	parent.add_child(t)
+	LowPoly.part(t, LowPoly.cyl(0.14, 0.24, 2.2, 6), bark, Vector3(0, 1.1, 0), Vector3(0, 0, 6), 0.03, seed_v)
+	LowPoly.part(t, LowPoly.sphere(1.25, 7, 5), petals[seed_v % petals.size()], Vector3(0, 2.7, 0), Vector3.ZERO, 0.22, seed_v + 100)
+	LowPoly.part(t, LowPoly.sphere(0.85, 6, 4), petals[(seed_v + 1) % petals.size()], Vector3(0.7, 3.1, 0.2), Vector3.ZERO, 0.18, seed_v + 200)
+	LowPoly.part(t, LowPoly.sphere(0.7, 6, 4), petals[(seed_v + 2) % petals.size()], Vector3(-0.6, 3.2, -0.3), Vector3.ZERO, 0.18, seed_v + 300)
+
+
+## 노을 정원: 해 질 녘 잔잔한 호수 한가운데 솟은 절벽 위 정원.
+## 둘레에는 꽃나무가 핀 작은 섬들과 바위 기둥, 멀리 보랏빛 산이 겹겹이 있다. 충돌 없음.
+func _build_lake() -> void:
+	var water := LowPoly.mat(Color(0.56, 0.66, 0.86), 0.08, 0.15)   # 하늘빛이 비친 물
+	var water_deep := LowPoly.mat(Color(0.38, 0.46, 0.72), 0.12, 0.1)
+	var bark := LowPoly.mat(Color(0.40, 0.28, 0.26), 0.95)
+	var moss := LowPoly.mat(Color(0.55, 0.66, 0.48), 0.95)
+	var petals := [LowPoly.mat(Color(0.98, 0.70, 0.78), 0.9), LowPoly.mat(Color(1.0, 0.86, 0.88), 0.9), LowPoly.mat(Color(0.93, 0.55, 0.66), 0.9)]
+	var far := [LowPoly.mat(Color(0.50, 0.50, 0.72), 0.95), LowPoly.mat(Color(0.60, 0.58, 0.78), 0.95), LowPoly.mat(Color(0.43, 0.43, 0.66), 0.95)]
+	var lake := LowPoly.part(self, LowPoly.cyl(300, 300, 0.2, 24), water, Vector3(0, LAKE_Y, 0))
+	lake.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 경기장 절벽 둘레의 짙은 물 (물이 깊어 보이게)
+	var deep := LowPoly.part(self, LowPoly.cyl(30, 30, 0.2, 16), water_deep, Vector3(0, LAKE_Y + 0.03, 0))
+	deep.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 11
+	var scenery := Node3D.new()
+	add_child(scenery)
+	# 멀리 겹겹이 선 산 (가까울수록 진하게)
+	for i in 22:
+		var a := TAU * i / 22.0 + rng.randf_range(-0.1, 0.1)
+		var r := rng.randf_range(140.0, 190.0)
+		var h := rng.randf_range(28.0, 62.0)
+		var m: Material = far[i % far.size()]
+		LowPoly.part(scenery, LowPoly.cyl(rng.randf_range(2.0, 6.0), rng.randf_range(26.0, 40.0), h, 6, 2), m,
+				Vector3(cos(a) * r, LAKE_Y + h * 0.5 - 1.0, sin(a) * r), Vector3.ZERO, 1.2, i)
+	# 바위 기둥 몇 개 (꼭대기에 꽃나무)
+	for i in 6:
+		var a := TAU * i / 6.0 + 0.5 + rng.randf_range(-0.2, 0.2)
+		var r := rng.randf_range(48.0, 70.0)
+		var h := rng.randf_range(16.0, 26.0)
+		var p := Vector3(cos(a) * r, LAKE_Y + h * 0.5, sin(a) * r)
+		LowPoly.part(scenery, LowPoly.cyl(rng.randf_range(3.0, 5.0), rng.randf_range(5.0, 7.0), h, 7, 2), _mats.rock, p, Vector3.ZERO, 0.6, i + 20)
+		LowPoly.part(scenery, LowPoly.cyl(rng.randf_range(3.2, 5.2), rng.randf_range(3.0, 5.0), 1.0, 7), moss, p + Vector3.UP * (h * 0.5 + 0.3), Vector3.ZERO, 0.3, i + 60)
+		_blossom_tree(scenery, p + Vector3.UP * (h * 0.5 + 0.7), rng.randf_range(1.6, 2.2), i, bark, petals)
+	# 물 위의 작은 섬: 풀 덮인 돌 + 꽃나무 한두 그루
+	for i in 14:
+		var a := rng.randf() * TAU
+		var r := rng.randf_range(36.0, 110.0)
+		var p := Vector3(cos(a) * r, LAKE_Y, sin(a) * r)
+		var w := rng.randf_range(2.5, 6.0)
+		LowPoly.part(scenery, LowPoly.cyl(w * 0.8, w, 1.4, 7), _mats.rock, p + Vector3.UP * 0.3, Vector3.ZERO, 0.3, i + 80)
+		LowPoly.part(scenery, LowPoly.cyl(w * 0.75, w * 0.85, 0.4, 7), moss, p + Vector3.UP * 1.1, Vector3.ZERO, 0.15, i + 120)
+		for k in (1 if w < 4.0 else 2):
+			_blossom_tree(scenery, p + Vector3(k * w * 0.4, 1.3, -k * w * 0.2), rng.randf_range(1.2, 1.9), i * 3 + k, bark, petals)
+	LowPoly.merge_children(scenery, true)
+
+
+## 노을 정원 하늘: 둥실 떠오르는 종이 등불 (안에서 빛난다), 꽃나무 바위섬 셋. 충돌 없음.
+func _build_lanterns() -> void:
+	var glow := StandardMaterial3D.new()
+	glow.albedo_color = Color(1.0, 0.78, 0.52)
+	glow.emission_enabled = true
+	glow.emission = Color(1.0, 0.62, 0.32)
+	glow.emission_energy_multiplier = 1.6
+	glow.roughness = 0.7
+	var cap := LowPoly.mat(_pal.navy, 0.8)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 33
+	for i in 16:
+		var a := TAU * i / 16.0 + rng.randf_range(-0.15, 0.15)
+		var r := rng.randf_range(32.0, 54.0)
+		var l := Node3D.new()
+		l.position = Vector3(cos(a) * r, rng.randf_range(-4.0, 14.0), sin(a) * r)
+		add_child(l)
+		var sc := rng.randf_range(0.9, 1.5)
+		var body := LowPoly.part(l, LowPoly.cyl(0.55 * sc, 0.45 * sc, 1.1 * sc, 8), glow, Vector3.ZERO)
+		body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		LowPoly.part(l, LowPoly.cyl(0.35 * sc, 0.58 * sc, 0.12 * sc, 8), cap, Vector3(0, 0.6 * sc, 0))
+		LowPoly.part(l, LowPoly.cyl(0.5 * sc, 0.4 * sc, 0.1 * sc, 8), cap, Vector3(0, -0.58 * sc, 0))
+		LowPoly.merge_children(l, false)
+		# 천천히 떠오르고 가라앉는다
+		var bob := create_tween().set_loops().set_trans(Tween.TRANS_SINE)
+		bob.tween_property(l, "position:y", l.position.y + rng.randf_range(1.5, 3.0), rng.randf_range(4.0, 7.0))
+		bob.tween_property(l, "position:y", l.position.y, rng.randf_range(4.0, 7.0))
+	var bark := LowPoly.mat(Color(0.40, 0.28, 0.26), 0.95)
+	var moss := LowPoly.mat(Color(0.58, 0.70, 0.50), 0.95)
+	var petals := [LowPoly.mat(Color(0.98, 0.70, 0.78), 0.9), LowPoly.mat(Color(1.0, 0.86, 0.88), 0.9)]
+	for i in 3:
+		var a := TAU * i / 3.0 + 1.1
+		var isl := Node3D.new()
+		isl.position = Vector3(cos(a) * 40.0, 4.0 + i * 3.0, sin(a) * 40.0)
+		add_child(isl)
+		var w := 3.5 + i
+		LowPoly.part(isl, LowPoly.cyl(w, 0.4, w * 1.6, 7, 2), _mats.rock, Vector3(0, -w * 0.8, 0), Vector3.ZERO, 0.35, i + 30)
+		LowPoly.part(isl, LowPoly.cyl(w + 0.15, w, 0.5, 7), moss, Vector3(0, 0.2, 0), Vector3.ZERO, 0.12, i + 40)
+		_blossom_tree(isl, Vector3(w * 0.25, 0.4, 0), 1.3, i, bark, petals)
+		LowPoly.merge_children(isl, true)
+		var bob := create_tween().set_loops().set_trans(Tween.TRANS_SINE)
+		bob.tween_property(isl, "position:y", isl.position.y + 1.2, 4.0 + i * 0.7)
+		bob.tween_property(isl, "position:y", isl.position.y, 4.0 + i * 0.7)
+
+
 func _hill_height(x: float, z: float) -> float:
 	var d := Vector2(x, z).length()
 	var hill := clampf((d - 40.0) / 80.0, 0.0, 1.0)
@@ -912,7 +1189,7 @@ func _bumpy_ground(src: PlaneMesh) -> ArrayMesh:
 ## 지금 아이템이 생길 수 있는 높은 자리들: [{"id", "pos", "ring", "name"}]
 func pickup_spots() -> Array:
 	var out := []
-	for b in BLOCKS:
+	for b in _lay.blocks:
 		if not b.has("pickup"):
 			continue
 		var ring := block_ring(b)
@@ -922,16 +1199,16 @@ func pickup_spots() -> Array:
 			continue
 		var pos := Vector3(b.c.x, b.base + b.h, b.c.y)
 		if b.id == "west_house":
-			pos.z -= 2.5
+			pos += _rot3(Vector3(0, 0, -2.5), _lay.turn)
 		out.append({"id": b.id, "pos": pos, "ring": ring, "name": b.pickup})
 	return out
 
 
 ## 낭떠러지에 떨어진 몸이 다시 설 자리: 다른 사람에게서 가장 먼 곳
 func safe_spawn(me: Node3D) -> Vector3:
-	var best := SAFE_SPOTS[0] as Vector3
+	var best := _lay.safe_spots[0] as Vector3
 	var best_d := -1.0
-	for s in SAFE_SPOTS:
+	for s in _lay.safe_spots:
 		var d := 99.0
 		for f in fighters:
 			if is_instance_valid(f) and f != me:
@@ -1010,7 +1287,8 @@ func _build_nav() -> void:
 	var grid := {}
 	for ix in n:
 		for iz in n:
-			var p := Vector2(-HALF + GRID * (ix + 0.5), -HALF + GRID * (iz + 0.5))
+			# 돌려 놓은 경기장은 격자도 같이 돌린다 (하늘 경기장과 똑같은 길목이 되게)
+			var p := _rot2(Vector2(-HALF + GRID * (ix + 0.5), -HALF + GRID * (iz + 0.5)), _lay.turn)
 			if _blocked(p, 0.9):
 				continue
 			grid[Vector2i(ix, iz)] = _add_node(Vector3(p.x, 0, p.y), "ground")
@@ -1031,7 +1309,7 @@ func _build_nav() -> void:
 
 	# 2) 구조물 위
 	var tops := {}
-	for b in BLOCKS:
+	for b in _lay.blocks:
 		if b.style == "runwall":
 			continue
 		var ids := []
@@ -1052,7 +1330,7 @@ func _build_nav() -> void:
 
 	# 3) 구조물 옆면: 낮으면 점프, 높으면 벽 타기. 위에서 아래로는 뛰어내리기.
 	#    떠 있는 다리는 밑에서 오를 수 없고 뛰어내리기만 한다.
-	for b in BLOCKS:
+	for b in _lay.blocks:
 		if b.style == "runwall":
 			continue
 		var top_y: float = _top_y(b)
@@ -1094,7 +1372,7 @@ func _build_nav() -> void:
 					_link(base_id, top_id, "jump" if height <= 1.3 else "climb")
 
 	# 4) 계단과 경사로
-	for r in RAMPS:
+	for r in _lay.ramps:
 		var from: Vector3 = r.from
 		var to: Vector3 = r.to
 		var flat := Vector3(to.x - from.x, 0, to.z - from.z).normalized()
@@ -1108,13 +1386,13 @@ func _build_nav() -> void:
 		_link(mid, top, "walk")
 
 	# 5) 발판끼리 점프
-	for pair in JUMP_LINKS:
+	for pair in _lay.jump_links:
 		var ia: int = tops[pair[0]][0]
 		var ib: int = tops[pair[1]][0]
 		_link(ia, ib, "jump")
 
 	# 6) 다리와 기둥 꼭대기를 잇는다 (가장 가까운 점끼리)
-	for pair in TOP_LINKS:
+	for pair in _lay.top_links:
 		var best := [-1, -1]
 		var best_d := INF
 		for ia in tops[pair[0]]:
@@ -1127,8 +1405,8 @@ func _build_nav() -> void:
 			_link(best[0], best[1], "walk")
 
 	# 7) 오르내리는 발판: 바닥 점 ↔ 위 점
-	for i in LIFTS.size():
-		var l: Dictionary = LIFTS[i]
+	for i in _lay.lifts.size():
+		var l: Dictionary = _lay.lifts[i]
 		var c: Vector2 = l.c
 		var low := _add_node(Vector3(c.x, 0.0, c.y), "ground", 0)
 		_connect_nearest(low, "ground", 3.4, 4)
@@ -1137,8 +1415,8 @@ func _build_nav() -> void:
 		_link(low, high, "lift", true, i)
 
 	# 8) 바람 발판: 발판 위 점 → 내려앉는 곳 (한쪽으로만)
-	for i in LAUNCH_PADS.size():
-		var pd: Dictionary = LAUNCH_PADS[i]
+	for i in _lay.pads.size():
+		var pd: Dictionary = _lay.pads[i]
 		var c: Vector2 = pd.c
 		var on_pad := _add_node(Vector3(c.x, 0.0, c.y), "ground")
 		_connect_nearest(on_pad, "ground", 3.6, 3)
@@ -1147,8 +1425,8 @@ func _build_nav() -> void:
 			_link(on_pad, land, "launch", false, i)
 
 	# 9) 짚라인: 출발 구조물 위 → 도착 구조물 위 (한쪽으로만)
-	for i in ZIPLINES.size():
-		var z: Dictionary = ZIPLINES[i]
+	for i in _lay.ziplines.size():
+		var z: Dictionary = _lay.ziplines[i]
 		var start := _nearest_in_area(Vector3(z.a.x, z.a.y - Zipline.HANG, z.a.z), z.from)
 		var end := _nearest_in_area(Vector3(z.b.x, z.b.y - Zipline.HANG, z.b.z), z.to)
 		if start >= 0 and end >= 0:
@@ -1169,7 +1447,7 @@ func _nearest_in_area(p: Vector3, area: String) -> int:
 
 
 func _covered_by_other(p: Vector3, self_id: String) -> bool:
-	for o in BLOCKS:
+	for o in _lay.blocks:
 		if o.id == self_id:
 			continue
 		if o.get("on", "") == self_id or (o.base <= p.y + 0.01 and _top_y(o) > p.y + 0.01):

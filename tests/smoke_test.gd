@@ -39,6 +39,20 @@ var _kite_t := 0
 var _trace := false   # trace=1: 대결 중 AI 상태 변화와 결과를 한 줄씩 출력
 
 
+## 경기장이 돌려져 있으면(노을 정원) 점검 자리와 바라보는 방향도 같이 돌린다
+func _P(v: Vector3) -> Vector3:
+	return Arena._rot3(v, int(Arena.THEMES[Game.arena_theme()].turn))
+
+
+## 거꾸로: 이 경기장 자리 → 하늘 경기장 기준 자리 (거리를 잴 때)
+func _U(v: Vector3) -> Vector3:
+	return Arena._rot3(v, (4 - int(Arena.THEMES[Game.arena_theme()].turn)) % 4)
+
+
+func _Y(yaw: float) -> float:
+	return yaw - int(Arena.THEMES[Game.arena_theme()].turn) * PI * 0.5
+
+
 func _initialize() -> void:
 	var seed_value := 20261124
 	for a in OS.get_cmdline_user_args():
@@ -60,6 +74,8 @@ func _initialize() -> void:
 			_ai_weapon = a.substr(9)
 		elif a.begins_with("diff="):
 			Game.difficulty = a.substr(5)
+		elif a.begins_with("arena="):
+			Game.arena_choice = a.substr(6)
 		elif a.begins_with("linger="):
 			_linger = int(a.substr(7))
 		elif a.begins_with("mystats="):
@@ -75,6 +91,8 @@ func _initialize() -> void:
 	Game.opponent_mode = "preset"
 	if Game.difficulty == "":
 		Game.difficulty = "normal"   # 내 컴퓨터에 저장된 난이도와 상관없이 보통으로 점검
+	if Game.arena_choice == "":
+		Game.arena_choice = "sky"
 	Game.opponent_preset = _ai_preset
 	Game.current_opponent = null
 	Game.test_player_build = CharacterBuild.new() if _my_preset == "" else CharacterBuild.preset(_my_preset)
@@ -221,8 +239,8 @@ func _parkour_step() -> void:
 		_game.hud.hide_menu()
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		# 북동쪽 기둥 남쪽 면 앞에서, 기둥을 바라본다
-		player.global_position = Vector3(7, 0.1, -4.8)
-		player.rotation.y = 0.0
+		player.global_position = _P(Vector3(7, 0.1, -4.8))
+		player.rotation.y = _Y(0.0)
 		player.head.rotation.x = deg_to_rad(10)
 	if _frame == 6:
 		Input.action_press("move_forward")
@@ -238,7 +256,7 @@ func _parkour_step() -> void:
 	if _frame == 170:
 		Input.action_release("move_forward")
 		player.head.rotation.x = deg_to_rad(-15)
-		player.rotation.y = deg_to_rad(150)
+		player.rotation.y = _Y(deg_to_rad(150))
 		_shot("k2_pillar_top")
 	if _frame == 180:
 		var ok: bool = player.global_position.y > 5.5 and player.sm.counts.get("climb", 0) >= 1
@@ -247,9 +265,9 @@ func _parkour_step() -> void:
 		if not ok:
 			_fail.append("wall climb")
 		# 서쪽 건물 동쪽 벽 옆에서 벽을 따라 달린다
-		player.global_position = Vector3(-10.9, 0.1, 4.0)
+		player.global_position = _P(Vector3(-10.9, 0.1, 4.0))
 		player.velocity = Vector3.ZERO
-		player.rotation.y = 0.0
+		player.rotation.y = _Y(0.0)
 		player.head.rotation.x = 0.0
 		_max_y = 0.0
 	if _frame == 182:
@@ -337,7 +355,7 @@ func _chase_step() -> void:
 
 func _set_goal(player: Player, ai: Duelist) -> void:
 	var g: Array = CHASE_GOALS[_goal]
-	player.global_position = g[0]
+	player.global_position = _P(g[0])
 	player.velocity = Vector3.ZERO
 	ai.traits["wall_climb"] = g[2]
 	ai.skills._cd["grapple"] = 999.0   # 갈고리 지름길 없이 길찾기만 본다
@@ -664,7 +682,7 @@ func _skills_step() -> void:
 	if _frame == 3:
 		_game.hud.hide_menu()
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-		player.rotation.y = 0.0
+		player.rotation.y = _Y(0.0)
 		player.head.rotation.x = 0.0
 	match _sk_part:
 		1:
@@ -677,20 +695,20 @@ func _skills_step() -> void:
 
 func _skills_blink_grapple(player: Player) -> void:
 	if _frame == 6:
-		_sk.z0 = player.global_position.z
+		_sk.z0 = _U(player.global_position).z
 		player.use_skill_slot(0)
 	if _frame == 8:
 		_shot("s1_blink")
-		var moved: float = _sk.z0 - player.global_position.z
+		var moved: float = _sk.z0 - _U(player.global_position).z
 		var again := player.use_skill("blink")   # 쿨타임이라 안 돼야 한다
 		var ok := moved > 4.0 and not again
 		print("SKILL blink moved=%.2f second_use=%s  => %s" % [moved, again, "OK" if ok else "FAIL"])
 		if not ok:
 			_fail.append("blink")
 		# 북동쪽 기둥을 올려다보고 갈고리
-		player.global_position = Vector3(7, 0.1, 3.0)
+		player.global_position = _P(Vector3(7, 0.1, 3.0))
 		player.velocity = Vector3.ZERO
-		player.rotation.y = 0.0
+		player.rotation.y = _Y(0.0)
 		player.head.rotation.x = deg_to_rad(15)
 		_max_y = 0.0
 	if _frame == 12:
@@ -700,8 +718,8 @@ func _skills_blink_grapple(player: Player) -> void:
 		_shot_once("s2_grapple")
 	_max_y = maxf(_max_y, player.global_position.y)
 	if _frame == 120:
-		var ok: bool = _sk.grap == "grapple" and player.global_position.z < -2.0 and _max_y > 2.0
-		print("SKILL grapple state=%s z=%.2f max_y=%.2f  => %s" % [_sk.grap, player.global_position.z, _max_y, "OK" if ok else "FAIL"])
+		var ok: bool = _sk.grap == "grapple" and _U(player.global_position).z < -2.0 and _max_y > 2.0
+		print("SKILL grapple state=%s z=%.2f max_y=%.2f  => %s" % [_sk.grap, _U(player.global_position).z, _max_y, "OK" if ok else "FAIL"])
 		if not ok:
 			_fail.append("grapple")
 		_game.queue_free()
@@ -730,10 +748,10 @@ func _skills_jump_haste(player: Player) -> void:
 			_fail.append("double jump")
 		player.use_skill_slot(1)
 		Input.action_press("move_forward")
-		_sk.z0 = player.global_position.z
+		_sk.z0 = _U(player.global_position).z
 	if _frame == 190:
 		Input.action_release("move_forward")
-		var dist: float = _sk.z0 - player.global_position.z
+		var dist: float = _sk.z0 - _U(player.global_position).z
 		# 걷기만 하면 1초에 4.5m 쯤 → 질풍이면 5.3m 넘게
 		var ok: bool = player.skills.haste_active() and dist > 5.3
 		print("SKILL haste walked=%.2f  => %s" % [dist, "OK" if ok else "FAIL"])
@@ -891,11 +909,11 @@ func _rps_step() -> void:
 	if _frame == 10:
 		ai.sm.go("idle")
 		player.sm.go("free")
-		player.global_position = Vector3(-10.2, 0.1, 0)
-		player.rotation.y = PI / 2.0
+		player.global_position = _P(Vector3(-10.2, 0.1, 0))
+		player.rotation.y = _Y(PI / 2.0)
 		player.head.rotation.x = 0.0
-		ai.global_position = Vector3(-11.6, 0.1, 0)
-		ai.rotation.y = -PI / 2.0
+		ai.global_position = _P(Vector3(-11.6, 0.1, 0))
+		ai.rotation.y = _Y(-PI / 2.0)
 		ai.velocity = Vector3.ZERO
 		_rps["hp0"] = ai.hp
 		player.stamina = player.max_stamina
